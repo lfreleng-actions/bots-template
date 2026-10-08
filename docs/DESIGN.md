@@ -334,9 +334,12 @@ GitHub reads and writes through the `gh` CLI, kept apart from any
 policy so the rules in a bot's scripts stay readable.
 
 Public functions: `api_object`, `api_list` (paginated), `api_write`,
-`graphql`, `run_gh`, `is_absent`, `require_str`, `require_int`,
-`require_sha` and `safe_message`. `GitHubError` carries the HTTP
-status parsed from `gh`'s stderr. Reads retry three times on
+`graphql`, `run_gh`, `is_absent`, `parse_status`, `require_str`,
+`require_int`, `require_sha` and `safe_message`. `GitHubError`
+carries the HTTP status its caller passes or, failing that, the one
+`parse_status` finds at the end of a line of `gh`'s stderr, in either
+form `gh` prints it: `(HTTP 404)` after a JSON message, or
+`gh: HTTP 403` alone for any other reply. Reads retry three times on
 `500`-`504` with a two-second delay; writes never retry. Every call
 has a sixty-second timeout and pins `API_VERSION`. `REPO_RE` and
 `SHA_RE` are the patterns the other modules share.
