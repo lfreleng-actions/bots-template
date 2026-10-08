@@ -379,6 +379,15 @@ inspects the zip directory (at most 64 entries), and extracts the
 permitted files alone, each read with a hard stop so a zip that lies
 about sizes cannot expand past its cap.
 
+The download retries a failure that `gh` reports without an HTTP
+status, meaning no reply arrived, and a `500`, `502`, `503` or `504`,
+with the read backoff of section 7.1: a runner can lose DNS for a
+second while harden-runner restarts its resolver. Any other status or
+a refusal ends it at once. One five-minute deadline spans every
+attempt, and a backoff that would reach it ends the download instead.
+The error names the attempt and the status but never quotes `gh`,
+whose message for a failed redirect carries the signed storage URL.
+
 Two profiles: `session` applies `SESSION_FILES` to an agent session
 from the current run, and `ledger` applies `LEDGER_FILES` to a prior
 run's ledger. Exit status 0 means accepted, with `artifact_id=<id>`
