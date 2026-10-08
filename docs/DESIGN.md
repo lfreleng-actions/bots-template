@@ -334,9 +334,12 @@ GitHub reads and writes through the `gh` CLI, kept apart from any
 policy so the rules in a bot's scripts stay readable.
 
 Public functions: `api_object`, `api_list` (paginated), `api_write`,
-`graphql`, `run_gh`, `is_absent`, `require_str`, `require_int`,
-`require_sha` and `safe_message`. `GitHubError` carries the HTTP
-status parsed from `gh`'s stderr. Reads retry three times on
+`graphql`, `run_gh`, `is_absent`, `parse_status`, `require_str`,
+`require_int`, `require_sha` and `safe_message`. `GitHubError`
+carries the HTTP status its caller passes or, failing that, the one
+`parse_status` finds at the end of a line of `gh`'s stderr, in either
+form `gh` prints it: `(HTTP 404)` after a JSON message, or
+`gh: HTTP 403` alone for any other reply. Reads retry three times on
 `500`-`504` with a two-second delay; writes never retry. Every call
 has a sixty-second timeout and pins `API_VERSION`. `REPO_RE` and
 `SHA_RE` are the patterns the other modules share.
@@ -375,6 +378,15 @@ plus 1 MiB of overhead, streams the zip to disk under that limit,
 inspects the zip directory (at most 64 entries), and extracts the
 permitted files alone, each read with a hard stop so a zip that lies
 about sizes cannot expand past its cap.
+
+The download retries a failure that `gh` reports without an HTTP
+status, meaning no reply arrived, and a `500`, `502`, `503` or `504`,
+with the read backoff of section 7.1: a runner can lose DNS for a
+second while harden-runner restarts its resolver. Any other status or
+a refusal ends it at once. One five-minute deadline spans every
+attempt, and a backoff that would reach it ends the download instead.
+The error names the attempt and the status but never quotes `gh`,
+whose message for a failed redirect carries the signed storage URL.
 
 Two profiles: `session` applies `SESSION_FILES` to an agent session
 from the current run, and `ledger` applies `LEDGER_FILES` to a prior
