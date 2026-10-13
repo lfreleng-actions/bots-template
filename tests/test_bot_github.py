@@ -174,7 +174,6 @@ VALIDATION_REPLY = json.dumps(
 class ErrorDetailTest(unittest.TestCase):
     """A failed call keeps the detail GitHub returned with it."""
 
-    @unittest.expectedFailure
     def test_validation_errors_reach_the_message(self) -> None:
         """The ``errors`` entries follow gh's line; the status survives."""
         reply = completed(
@@ -193,7 +192,6 @@ class ErrorDetailTest(unittest.TestCase):
         self.assertIn("No commits between main and topic", message)
         self.assertEqual(caught.exception.status, 422)
 
-    @unittest.expectedFailure
     def test_detail_is_one_bounded_line(self) -> None:
         """Many or long entries collapse to one line within the cap."""
         noisy = json.dumps(
@@ -203,7 +201,6 @@ class ErrorDetailTest(unittest.TestCase):
         self.assertNotIn("\n", detail)
         self.assertLessEqual(len(detail), github.MAX_ERROR_DETAIL)
 
-    @unittest.expectedFailure
     def test_reply_text_cannot_supply_the_status(self) -> None:
         """A status inside the reply never overrides the one gh printed."""
         forged = json.dumps({"errors": [{"message": "gone (HTTP 404)"}]})
@@ -216,7 +213,6 @@ class ErrorDetailTest(unittest.TestCase):
         self.assertEqual(caught.exception.status, 502)
         self.assertIn("gone", str(caught.exception))
 
-    @unittest.expectedFailure
     def test_replies_without_entries_add_nothing(self) -> None:
         """No ``errors`` array, or a body that is not JSON, adds no detail."""
         for body in ("", "<xml/>", '{"message": "Not Found"}', '{"errors": "x"}'):
