@@ -31,6 +31,12 @@ READ_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 2
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
+# gh prints a failed call's JSON reply on stdout and keeps only its
+# summary for stderr; the reply's ``errors`` entries say what failed.
+MAX_ERROR_DETAIL = 500
+MAX_ERROR_ENTRIES = 5
+# Keys a REST ``errors`` entry uses; the ones that name the failure.
+ERROR_ENTRY_KEYS = ("resource", "field", "code", "message")
 
 
 def parse_status(text: str) -> int | None:
@@ -69,6 +75,47 @@ def is_read(args: list[str]) -> bool:
     return args[:2] in (["pr", "list"], ["pr", "view"], ["search", "prs"])
 
 
+def entry_text(entry: Any) -> str:
+    """One ``errors`` entry as text: ``Resource.field code: message``."""
+    if isinstance(entry, str):
+        return entry
+    if not isinstance(entry, dict):
+        return ""
+    data = cast("dict[str, Any]", entry)
+    parts = {key: data.get(key) for key in ERROR_ENTRY_KEYS}
+    where = ".".join(
+        str(parts[key]) for key in ("resource", "field") if isinstance(parts[key], str)
+    )
+    code = parts["code"] if isinstance(parts["code"], str) else ""
+    message = parts["message"] if isinstance(parts["message"], str) else ""
+    head = " ".join(text for text in (where, code) if text)
+    return f"{head}: {message}" if head and message else head or message
+
+
+def error_detail(body: str) -> str:
+    """The ``errors`` entries of a failed call's reply, as one bounded line.
+
+    Empty when the reply is not JSON or carries no entries. Newlines
+    are flattened, so nothing in the reply can add a line that
+    ``parse_status`` would read.
+    """
+    try:
+        reply = json.loads(body)
+    except (ValueError, RecursionError):
+        return ""
+    errors = (
+        cast("dict[str, Any]", reply).get("errors") if isinstance(reply, dict) else None
+    )
+    if not isinstance(errors, list):
+        return ""
+    entries = cast("list[Any]", errors)
+    texts = [text for text in map(entry_text, entries[:MAX_ERROR_ENTRIES]) if text]
+    if len(entries) > MAX_ERROR_ENTRIES:
+        texts.append(f"and {len(entries) - MAX_ERROR_ENTRIES} more")
+    detail = " ".join("; ".join(texts).split())
+    return detail[:MAX_ERROR_DETAIL]
+
+
 def run_once(args: list[str], input: str | None) -> str:
     """One gh invocation, raising GitHubError on any failure."""
     try:
@@ -85,7 +132,12 @@ def run_once(args: list[str], input: str | None) -> str:
     except OSError as exc:
         raise GitHubError(f"could not run gh: {exc}") from exc
     if proc.returncode != 0:
-        raise GitHubError(proc.stderr.strip() or f"gh {' '.join(args)} failed")
+        summary = proc.stderr.strip() or f"gh {' '.join(args)} failed"
+        status = parse_status(summary)
+        detail = error_detail(proc.stdout) if status is not None else ""
+        # The status is gh's, passed explicitly: the detail is reply
+        # text and never gets to supply one.
+        raise GitHubError(f"{summary}: {detail}" if detail else summary, status)
     return proc.stdout
 
 

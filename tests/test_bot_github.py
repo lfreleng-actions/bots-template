@@ -158,6 +158,78 @@ class GitHubErrorTest(unittest.TestCase):
         self.assertEqual(failure.status, 503)
 
 
+VALIDATION_REPLY = json.dumps(
+    {
+        "message": "Validation Failed",
+        "errors": [
+            {"resource": "PullRequest", "field": "head", "code": "invalid"},
+            {"message": "No commits between main and topic"},
+        ],
+        "documentation_url": "https://docs.github.com/rest",
+        "status": "422",
+    }
+)
+
+
+class ErrorDetailTest(unittest.TestCase):
+    """A failed call keeps the detail GitHub returned with it."""
+
+    def test_validation_errors_reach_the_message(self) -> None:
+        """The ``errors`` entries follow gh's line; the status survives."""
+        reply = completed(
+            stdout=VALIDATION_REPLY,
+            stderr="gh: Validation Failed (HTTP 422)",
+            code=1,
+        )
+        with (
+            patch.object(github.subprocess, "run", return_value=reply),
+            self.assertRaises(github.GitHubError) as caught,
+        ):
+            github.run_gh(["api", "--method", "POST", "repos/o/r/pulls"], input="{}")
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("gh: Validation Failed (HTTP 422)"))
+        self.assertIn("PullRequest.head invalid", message)
+        self.assertIn("No commits between main and topic", message)
+        self.assertEqual(caught.exception.status, 422)
+
+    def test_detail_is_one_bounded_line(self) -> None:
+        """Many or long entries collapse to one line within the cap."""
+        noisy = json.dumps(
+            {"errors": [{"message": "x\n" * 400}, *([{"code": "y"}] * 50)]}
+        )
+        detail = github.error_detail(noisy)
+        self.assertNotIn("\n", detail)
+        self.assertLessEqual(len(detail), github.MAX_ERROR_DETAIL)
+
+    def test_reply_text_cannot_supply_the_status(self) -> None:
+        """A status inside the reply never overrides the one gh printed."""
+        forged = json.dumps({"errors": [{"message": "gone (HTTP 404)"}]})
+        reply = completed(stdout=forged, stderr="gh: Bad Gateway (HTTP 502)", code=1)
+        with (
+            patch.object(github.subprocess, "run", return_value=reply),
+            self.assertRaises(github.GitHubError) as caught,
+        ):
+            github.run_gh(["api", "--method", "POST", "repos/o/r/x"], input="{}")
+        self.assertEqual(caught.exception.status, 502)
+        self.assertIn("gone", str(caught.exception))
+
+    def test_replies_without_entries_add_nothing(self) -> None:
+        """No ``errors`` array, or a body that is not JSON, adds no detail."""
+        for body in ("", "<xml/>", '{"message": "Not Found"}', '{"errors": "x"}'):
+            with self.subTest(body=body):
+                self.assertEqual(github.error_detail(body), "")
+        reply = completed(
+            stdout='{"message": "Not Found"}', stderr="gh: Not Found (HTTP 404)", code=1
+        )
+        with (
+            patch.object(github.subprocess, "run", return_value=reply),
+            self.assertRaises(github.GitHubError) as caught,
+        ):
+            github.run_gh(["api", "repos/o/r"])
+        self.assertEqual(str(caught.exception), "gh: Not Found (HTTP 404)")
+        self.assertEqual(caught.exception.status, 404)
+
+
 class RepliesTest(unittest.TestCase):
     """The typed readers refuse replies of the wrong shape."""
 
