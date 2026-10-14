@@ -359,7 +359,7 @@ jobs:
       - name: 'Publish selection evidence'
         id: evidence
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "bot-evidence-${{ steps.identity.outputs.namespace }}"
           path: 'artefacts/'
@@ -524,7 +524,7 @@ jobs:
       - name: 'Preserve session output'
         if: always() && steps.packet.outcome == 'success'
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # One name per target across attempts, so the apply job
           # always finds it; a rerun of this entry replaces its own
@@ -770,7 +770,7 @@ jobs:
       - name: 'Attach apply result'
         if: always()
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # yamllint disable-line rule:line-length
           name: "bot-result-${{ needs.prepare.outputs.namespace }}-${{ matrix.key }}-${{ github.run_attempt }}"
@@ -874,7 +874,7 @@ jobs:
 
       - name: 'Attach run report'
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # yamllint disable-line rule:line-length
           name: "bot-report-${{ needs.prepare.outputs.namespace }}-${{ github.run_attempt }}"
@@ -887,7 +887,7 @@ jobs:
       # unique within a run, which is all the upload requires.
       - name: 'Publish ledger'
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: 'bot-ledger'
           path: 'ledger/'
