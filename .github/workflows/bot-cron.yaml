@@ -117,7 +117,7 @@ jobs:
       max_targets: "${{ inputs.max_targets || '20' }}"
       egress_policy: 'block'
       # yamllint disable-line rule:line-length
-      egress_allow_config: '@e0e35011ee145321a51d3226f044ec88dfe645b1'  # v0.16.4
+      egress_allow_config: '@56d70f0eae78f334a598d1ffe071d4b821517b22'  # v0.17.1
       # Repository-level credentials reach the trusted prepare and
       # apply jobs, never an action in the agent job. No client id
       # permits dry-run fallback; a missing key fails token creation

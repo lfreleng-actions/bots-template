@@ -69,7 +69,7 @@ jobs:
       # caller runs, so a pull request proves the trusted jobs' egress.
       egress_policy: 'block'
       # yamllint disable-line rule:line-length
-      egress_allow_config: '@e0e35011ee145321a51d3226f044ec88dfe645b1'  # v0.16.4
+      egress_allow_config: '@56d70f0eae78f334a598d1ffe071d4b821517b22'  # v0.17.1
       assets_repository: >-
         ${{ github.event.pull_request.head.repo.full_name }}
       assets_ref: "${{ github.event.pull_request.head.sha }}"
@@ -89,7 +89,7 @@ jobs:
       max_concurrent_agents: '2'
       egress_policy: 'block'
       # yamllint disable-line rule:line-length
-      egress_allow_config: '@e0e35011ee145321a51d3226f044ec88dfe645b1'  # v0.16.4
+      egress_allow_config: '@56d70f0eae78f334a598d1ffe071d4b821517b22'  # v0.17.1
       assets_repository: "${{ github.repository }}"
       assets_ref: "${{ github.sha }}"
     secrets:
