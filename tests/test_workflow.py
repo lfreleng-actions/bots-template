@@ -36,6 +36,7 @@ HARDEN_RUNNER = "step-security/harden-runner"
 BLOCK_ACTION = "lfreleng-actions/harden-runner-block-action"
 CHECKOUT = "actions/checkout"
 APP_TOKEN = "actions/create-github-app-token"
+SPLITTER = "lfreleng-actions/list-splitter-action"
 DOWNLOAD = "actions/download-artifact"
 UPLOAD = "actions/upload-artifact"
 REUSABLE_CALL = "$/.github/workflows/bot.yaml"
@@ -428,6 +429,59 @@ class ReportContracts(ReusableWorkflowCase):
         self.assertEqual(ledger["with"]["name"], "bot-ledger")
         self.assertEqual(ledger["with"]["retention-days"], 90)
         self.assertEqual(ledger["with"]["if-no-files-found"], "error")
+
+
+class ListInputContracts(ReusableWorkflowCase):
+    """Operator lists are split and checked once, before any token exists."""
+
+    # Step id of the splitter for each list input.
+    LISTS: ClassVar[dict[str, str]] = {
+        "repositories": "repositories",
+        "exclude_repos": "exclusions",
+    }
+
+    def test_each_list_is_split_as_repository_names_of_the_org(self) -> None:
+        """Bare names of the trusted owner, offline, with no token to hand."""
+        self.assertEqual(len(self.actions("prepare", SPLITTER)), len(self.LISTS))
+        for name, identity in self.LISTS.items():
+            with self.subTest(input=name):
+                split = self.step("prepare", identity)
+                self.assertTrue(is_action(split, SPLITTER))
+                self.assertEqual(split["with"]["list"], f"${{{{ inputs.{name} }}}}")
+                self.assertEqual(split["with"]["validate"], "repository")
+                self.assertEqual(split["with"]["owner"], "${{ inputs.org }}")
+                self.assertEqual(split["with"]["token"], "")
+                self.assertNotIn("verify", split["with"])
+
+    def test_lists_are_split_before_the_read_mint(self) -> None:
+        """A bad name fails the run before the App key is used."""
+        mint = self.position("prepare", "app-token")
+        for identity in self.LISTS.values():
+            with self.subTest(step=identity):
+                self.assertLess(self.position("prepare", identity), mint)
+
+    def test_read_mint_scope_is_the_split_repositories(self) -> None:
+        """Blank stays organisation-wide; named repositories narrow it."""
+        mint = self.action("prepare", APP_TOKEN)
+        self.assertEqual(
+            mint["with"]["repositories"],
+            "${{ steps.repositories.outputs.repositories }}",
+        )
+
+    def test_selection_reads_the_split_lists(self) -> None:
+        """The raw inputs reach the splitters and nothing else."""
+        env = self.step("prepare", "Prepare evidence")["env"]
+        self.assertEqual(env["REPOSITORIES"], "${{ steps.repositories.outputs.csv }}")
+        self.assertEqual(env["EXCLUDE_REPOS"], "${{ steps.exclusions.outputs.csv }}")
+        splitters = {id(s) for s in self.actions("prepare", SPLITTER)}
+        for job in self.jobs:
+            for step in self.steps(job):
+                if id(step) in splitters:
+                    continue
+                with self.subTest(job=job, step=step.get("name")):
+                    text = dumped(step)
+                    for name in self.LISTS:
+                        self.assertNotIn(f"inputs.{name}", text)
 
 
 class InputContracts(ReusableWorkflowCase):
