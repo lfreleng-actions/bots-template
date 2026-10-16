@@ -440,7 +440,6 @@ class ListInputContracts(ReusableWorkflowCase):
         "exclude_repos": "exclusions",
     }
 
-    @unittest.expectedFailure
     def test_each_list_is_split_as_repository_names_of_the_org(self) -> None:
         """Bare names of the trusted owner, offline, with no token to hand."""
         self.assertEqual(len(self.actions("prepare", SPLITTER)), len(self.LISTS))
@@ -454,7 +453,6 @@ class ListInputContracts(ReusableWorkflowCase):
                 self.assertEqual(split["with"]["token"], "")
                 self.assertNotIn("verify", split["with"])
 
-    @unittest.expectedFailure
     def test_lists_are_split_before_the_read_mint(self) -> None:
         """A bad name fails the run before the App key is used."""
         mint = self.position("prepare", "app-token")
@@ -462,7 +460,6 @@ class ListInputContracts(ReusableWorkflowCase):
             with self.subTest(step=identity):
                 self.assertLess(self.position("prepare", identity), mint)
 
-    @unittest.expectedFailure
     def test_read_mint_scope_is_the_split_repositories(self) -> None:
         """Blank stays organisation-wide; named repositories narrow it."""
         mint = self.action("prepare", APP_TOKEN)
@@ -471,7 +468,6 @@ class ListInputContracts(ReusableWorkflowCase):
             "${{ steps.repositories.outputs.repositories }}",
         )
 
-    @unittest.expectedFailure
     def test_selection_reads_the_split_lists(self) -> None:
         """The raw inputs reach the splitters and nothing else."""
         env = self.step("prepare", "Prepare evidence")["env"]

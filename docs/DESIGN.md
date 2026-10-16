@@ -466,22 +466,22 @@ through that repository's own review.
 
 <!-- markdownlint-disable MD013 -->
 
-| Input                   | Type    | Default                          | Meaning                                                              |
-| ----------------------- | ------- | -------------------------------- | -------------------------------------------------------------------- |
-| `org`                   | string  | required                         | Target owner; live runs require an organisation App                  |
-| `dry_run`               | boolean | `true`                           | Run the agent and the checks; write nothing                          |
-| `model`                 | string  | `claude-opus-5.5`                | Copilot CLI model identifier, lower-case                             |
-| `repositories`          | string  | `''`                             | Repositories to scan; commas and/or spaces; empty scans the owner    |
-| `exclude_repos`         | string  | `''`                             | Comma-separated repositories to skip; overrides the bundled list     |
-| `max_targets`           | string  | `'20'`                           | Targets to hand to the agent at most; `0` lifts the cap              |
-| `max_concurrent_agents` | string  | `'5'`                            | Agent sessions running at once, 1-30                                 |
-| `max_runtime_minutes`   | string  | `'20'`                           | Wall-clock budget for each session, 1-120                            |
-| `skip_agent`            | boolean | `false`                          | Plumbing test: prepare and report without sessions                   |
-| `egress_policy`         | string  | `block`                          | `harden-runner` egress for trusted jobs: `audit` or `block`          |
-| `egress_allow_config`   | string  | `''`                             | `harden-runner-block-action` config coordinate                       |
-| `github_app_client_id`  | string  | `''`                             | GitHub App client id; empty limits runs to dry-run                   |
-| `assets_repository`     | string  | `lfreleng-actions/bots-template` | Trusted repository providing the prompt and scripts                  |
-| `assets_ref`            | string  | `''`                             | Commit, tag or branch of the assets; empty resolves the caller's SHA |
+| Input                   | Type    | Default                          | Meaning                                                                |
+| ----------------------- | ------- | -------------------------------- | ---------------------------------------------------------------------- |
+| `org`                   | string  | required                         | Target owner; live runs require an organisation App                    |
+| `dry_run`               | boolean | `true`                           | Run the agent and the checks; write nothing                            |
+| `model`                 | string  | `claude-opus-5.5`                | Copilot CLI model identifier, lower-case                               |
+| `repositories`          | string  | `''`                             | Repositories to scan; commas and/or spaces; empty scans the owner      |
+| `exclude_repos`         | string  | `''`                             | Repositories to skip; commas and/or spaces; overrides the bundled list |
+| `max_targets`           | string  | `'20'`                           | Targets to hand to the agent at most; `0` lifts the cap                |
+| `max_concurrent_agents` | string  | `'5'`                            | Agent sessions running at once, 1-30                                   |
+| `max_runtime_minutes`   | string  | `'20'`                           | Wall-clock budget for each session, 1-120                              |
+| `skip_agent`            | boolean | `false`                          | Plumbing test: prepare and report without sessions                     |
+| `egress_policy`         | string  | `block`                          | `harden-runner` egress for trusted jobs: `audit` or `block`            |
+| `egress_allow_config`   | string  | `''`                             | `harden-runner-block-action` config coordinate                         |
+| `github_app_client_id`  | string  | `''`                             | GitHub App client id; empty limits runs to dry-run                     |
+| `assets_repository`     | string  | `lfreleng-actions/bots-template` | Trusted repository providing the prompt and scripts                    |
+| `assets_ref`            | string  | `''`                             | Commit, tag or branch of the assets; empty resolves the caller's SHA   |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -494,11 +494,18 @@ through that repository's own review.
 
 <!-- markdownlint-enable MD013 -->
 
-The prepare job validates every numeric input against its range,
-the model against `^[a-z0-9.-]+$` and the repository list against
-`^[A-Za-z0-9_.,-]*$` before anything else runs. A bot that adds an
-input declares it here, forwards it in the callers and adds it to
-`InputContracts` in the tests (see [Customising](CUSTOMISING.md)).
+The prepare job validates every numeric input against its range and
+the model against `^[a-z0-9.-]+$` before anything else runs. The
+`repositories` and `exclude_repos` lists go to
+[`list-splitter-action`](https://github.com/lfreleng-actions/list-splitter-action),
+which splits each on commas and whitespace, drops repeats without
+regard to case, and refuses anything but a bare repository name of
+`org`, reporting every bad name before the run fails. It works
+offline and takes no token, and both splits run before the read
+mint; the mint's scope and the selection's lists come from its
+outputs, never the raw inputs. A bot that adds an input declares it
+here, forwards it in the callers and adds it to `InputContracts` in
+the tests (see [Customising](CUSTOMISING.md)).
 
 ### 10.2 Scheduled caller (`bot-cron.yaml`)
 
@@ -623,6 +630,7 @@ assets.
 | Apply           | Runs for every entry after the agent; evidence passes verification before the session fetch; the write mint runs on the live path alone; every entry uploads a typed result                                                                                                                                                                |
 | Report          | Gathers namespaced results; the ledger artifact has a fixed name and long retention                                                                                                                                                                                                                                                        |
 | Inputs          | The declared inputs, secrets and defaults                                                                                                                                                                                                                                                                                                  |
+| List inputs     | The splitter reads each list as bare repository names of `org`, offline and without a token, before the read mint; the mint's scope and the selection's lists come from its outputs, and no other step reads the raw inputs                                                                                                                |
 | Cron caller     | Dispatch stays dry-run unless the operator says otherwise; the form; display names map to identifiers; credentials forwarded and assets pinned; dry dispatches outside the live group; steps pinned                                                                                                                                        |
 | Testing caller  | Plumbing is secretless selection of the PR head; the manual dry run holds the model credential alone; regression runs the locked suite; steps pinned                                                                                                                                                                                       |
 
