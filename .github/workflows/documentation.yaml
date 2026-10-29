@@ -62,7 +62,14 @@ jobs:
       - name: 'Install uv'
         # yamllint disable-line rule:line-length
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        # Outside the workspace, as in bot.yaml: setup-uv starts the
+        # interpreter it finds in its working directory.
+        env:
+          UV_NO_CONFIG: '1'
+          UV_SYSTEM_PYTHON: '1'
+          UV_NO_PROJECT: '1'
         with:
+          working-directory: "${{ runner.temp }}"
           # No caching on a publishing path: a restored cache that a
           # lower-privileged run could populate buys little here and
           # widens the supply chain for the deployed artefact.
