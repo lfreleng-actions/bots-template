@@ -39,9 +39,15 @@ APP_TOKEN = "actions/create-github-app-token"
 SPLITTER = "lfreleng-actions/list-splitter-action"
 DOWNLOAD = "actions/download-artifact"
 UPLOAD = "actions/upload-artifact"
+SETUP_UV = "astral-sh/setup-uv"
 REUSABLE_CALL = "$/.github/workflows/bot.yaml"
 TRUSTED_JOBS = ("prepare", "apply", "report")
 CALLER_PERMISSIONS = {"contents": "read", "actions": "read"}
+PREFLIGHT = "Pre-flight: workflow contracts and audit"
+# The prepare job's uv steps, which the planted-workspace job runs verbatim.
+UV_STEPS = ("Set up uv", "Install zizmor", PREFLIGHT)
+SETUP_UV_WORKDIR = "${{ runner.temp }}"
+SETUP_UV_ENV = {"UV_NO_CONFIG": "1", "UV_SYSTEM_PYTHON": "1", "UV_NO_PROJECT": "1"}
 
 COMMIT_PIN = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 SECRET_REFERENCE = re.compile(r"secrets\.[A-Za-z0-9_]+")
@@ -71,6 +77,17 @@ def is_action(step: dict[str, Any], action: str) -> bool:
 def dumped(node: object) -> str:
     """Serialise a YAML subtree so a regex can scan every value in it."""
     return json.dumps(node, sort_keys=True)
+
+
+def load_jobs(path: Path) -> dict[str, dict[str, Any]]:
+    """Parse a workflow file and return its jobs."""
+    loaded = cast(dict[str, Any], yaml.safe_load(path.read_text(encoding="utf-8")))
+    return cast(dict[str, dict[str, Any]], loaded["jobs"])
+
+
+def runnable(step: dict[str, Any]) -> dict[str, Any]:
+    """Keep the keys that decide what a step does, dropping its name and id."""
+    return {key: step.get(key) for key in ("uses", "with", "env", "run")}
 
 
 class WorkflowCase(unittest.TestCase):
@@ -193,7 +210,7 @@ class PrepareContracts(ReusableWorkflowCase):
         """Pin assets, audit the workflow, check config, mint, then verify identity."""
         order = [
             self.position("prepare", "Pin assets commit"),
-            self.position("prepare", "Pre-flight: workflow contracts and audit"),
+            self.position("prepare", PREFLIGHT),
             self.position("prepare", "Pre-flight: configuration and credentials"),
             self.position("prepare", "app-token"),
             self.position("prepare", "Pre-flight: App identity and token grants"),
@@ -214,6 +231,48 @@ class PrepareContracts(ReusableWorkflowCase):
         """The audit tool installs at one exact version."""
         run = self.step("prepare", "Install zizmor")["run"]
         self.assertRegex(run, r"zizmor==\d+\.\d+\.\d+")
+
+    def test_preflight_uv_run_sees_only_the_assets_checkout(self) -> None:
+        """Nothing but the pinned assets lands in the workspace before uv runs.
+
+        uv in the assets directory takes a pyproject.toml above it that
+        declares a uv workspace as its workspace root, lock file
+        included, so the job must not check out or download anything
+        else first.
+        """
+        before = self.steps("prepare")[: self.position("prepare", PREFLIGHT)]
+        checkouts = [s for s in before if is_action(s, CHECKOUT)]
+        self.assertEqual(len(checkouts), 1)
+        self.assertEqual(checkouts[0]["with"]["path"], "bot-assets")
+        self.assertEqual(
+            checkouts[0]["with"]["repository"], "${{ inputs.assets_repository }}"
+        )
+        self.assertEqual([s for s in before if is_action(s, DOWNLOAD)], [])
+        run = str(self.step("prepare", PREFLIGHT)["run"])
+        self.assertIn("\ncd bot-assets\n", run)
+
+    def test_preflight_environment_is_built_outside_the_workspace(self) -> None:
+        """uv run gets an interpreter found in RUNNER_TEMP and an env there.
+
+        uv run in a project runs the interpreter of the project's .venv
+        even when given an absolute --python; only a project environment
+        outside the checkout keeps it from doing so.
+        """
+        run = flatten(self.step("prepare", PREFLIGHT)["run"])
+        lookup = (
+            'py="$(cd "$RUNNER_TEMP" &&'
+            ' UV_NO_CONFIG=1 uv python find --system --no-project)"'
+        )
+        gate = (
+            'UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/preflight-venv"'
+            ' uv run --locked --python "$py" python -B scripts/preflight.py'
+        )
+        self.assertIn(lookup, run)
+        self.assertIn('if [ -z "$py" ]; then', run)
+        self.assertIn(gate, run)
+        self.assertLess(run.index(lookup), run.index("cd bot-assets"))
+        self.assertLess(run.index("cd bot-assets"), run.index(gate))
+        self.assertEqual(run.count("uv run --"), 1)
 
     def test_ledger_comes_from_the_native_token_before_selection(self) -> None:
         """The ledger fetch reads this repository's artifacts with the native token."""
@@ -644,9 +703,62 @@ class TestingContracts(WorkflowCase):
     def test_caller_steps_are_pinned(self) -> None:
         """Runner steps name commits and every checkout drops credentials."""
         self.assert_pinned_steps()
-        for job in ("regression", "docs"):
+        for job in ("regression", "docs", "uv-workdir"):
             for step in self.actions(job, CHECKOUT):
                 self.assertIs(step["with"]["persist-credentials"], False)
+
+    def test_uv_workdir_job_runs_the_prepare_uv_steps(self) -> None:
+        """Plants go in first, bot.yaml's uv steps run verbatim, the check last."""
+        prepare = load_jobs(REUSABLE)["prepare"]["steps"]
+        for name in UV_STEPS:
+            with self.subTest(step=name):
+                (original,) = [s for s in prepare if s.get("name") == name]
+                self.assertEqual(
+                    runnable(self.step("uv-workdir", name)), runnable(original)
+                )
+        plant = "Plant Python and uv settings"
+        order = [
+            self.position("uv-workdir", "Checkout assets"),
+            self.position("uv-workdir", plant),
+            *(self.position("uv-workdir", name) for name in UV_STEPS),
+            self.position("uv-workdir", "Check outputs and marker"),
+        ]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(order[-1], len(self.steps("uv-workdir")) - 1)
+        checkout = self.step("uv-workdir", "Checkout assets")
+        self.assertEqual(checkout["with"]["path"], "bot-assets")
+        planted = str(self.step("uv-workdir", plant)["run"])
+        self.assertIn('plant "$GITHUB_WORKSPACE"\n', planted)
+        self.assertIn('plant "$GITHUB_WORKSPACE/bot-assets"\n', planted)
+        check = str(self.step("uv-workdir", "Check outputs and marker")["run"])
+        self.assertIn('"$RUNNER_TEMP/preflight-venv/bin/python" --version', check)
+        self.assertEqual(self.jobs["uv-workdir"]["permissions"], {"contents": "read"})
+
+
+class SetupUvContracts(unittest.TestCase):
+    """setup-uv works outside the workspace in every workflow."""
+
+    def test_every_setup_uv_step_works_in_runner_temp(self) -> None:
+        """setup-uv starts the interpreter it finds in its working directory.
+
+        It also reads uv settings there with its own code, so the env
+        alone would not do; python-version would export UV_PYTHON to
+        every later step, so it is not used instead.
+        """
+        found = 0
+        for path in sorted(WORKFLOWS.glob("*.yaml")):
+            for job, body in load_jobs(path).items():
+                for step in cast(list[dict[str, Any]], body.get("steps", [])):
+                    if not is_action(step, SETUP_UV):
+                        continue
+                    found += 1
+                    with self.subTest(workflow=path.name, job=job):
+                        self.assertEqual(
+                            step["with"]["working-directory"], SETUP_UV_WORKDIR
+                        )
+                        self.assertEqual(step["env"], SETUP_UV_ENV)
+                        self.assertNotIn("python-version", step["with"])
+        self.assertGreater(found, 0)
 
 
 if __name__ == "__main__":
