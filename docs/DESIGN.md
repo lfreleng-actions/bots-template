@@ -151,7 +151,7 @@ jobs. Callers run reviewed assets with secrets or none at all: the
 testing workflow's pull request legs check out the pull request's
 own head as assets and pass no secret for this reason.
 
-`egress_allow_config` names the organisation allow-list coordinate
+`harden_runner_allowlist` names the organisation allow-list coordinate
 for `harden-runner-block-action`; the bundled callers pin it to a
 commit. `github_app_client_id` and the two secrets reach trusted
 jobs alone, by construction of the reusable workflow.
@@ -311,7 +311,7 @@ target, so a rerun of a matrix entry replaces its own earlier session
 rather than colliding with it.
 
 The agent job runs `harden-runner` in **audit** mode whatever the
-caller's `egress_policy`: the model backend, `api.githubcopilot.com`,
+caller's `harden_runner_egress`: the model backend, `api.githubcopilot.com`,
 is not in the organisation allow-list, and the job holds nothing a
 block could protect beyond the model credential. The trusted jobs
 run in block mode (section 9).
@@ -446,14 +446,27 @@ candidate.
 
 ## 9. Egress
 
-The trusted jobs run `harden-runner` in the mode `egress_policy`
+The trusted jobs run `harden-runner` in the mode `harden_runner_egress`
 names, `block` by default, with the allow-list that
 `lfreleng-actions/harden-runner-block-action` loads from the
-coordinate in `egress_allow_config`. The bundled callers pin that
+coordinate in `harden_runner_allowlist`. The bundled callers pin that
 coordinate to a commit (`@<40 hex>`), and the pre-flight gate refuses
 block mode with an unpinned coordinate or an empty loaded list. The
 prepare job prints the allow-list summary to the step summary; the
 apply and report jobs load it without a summary.
+
+A caller whose jobs need endpoints outside the organisation list
+adds them without replacing it. `harden_runner_supplemental_allowlist`
+names a second list in the same coordinate grammar, merged with the
+baseline; naming one makes it required, so a missing list fails at
+the loader rather than at the first blocked connection.
+`harden_runner_supplemental_unpinned` lets that list omit its `@ref`
+and follow its default branch, which the action permits for a list
+in the caller's own organisation and refuses otherwise.
+`harden_runner_extra_endpoints`
+takes `host[:port]` tokens inline, for a short-lived fix while a list
+change goes through review. Every loader step forwards all three,
+empty or not, so every job sees the same list.
 
 The agent job always audits (section 6). A bot that needs the agent
 to reach a further endpoint changes nothing here; a bot that needs a
@@ -466,22 +479,25 @@ through that repository's own review.
 
 <!-- markdownlint-disable MD013 -->
 
-| Input                   | Type    | Default                          | Meaning                                                                |
-| ----------------------- | ------- | -------------------------------- | ---------------------------------------------------------------------- |
-| `org`                   | string  | required                         | Target owner; live runs require an organisation App                    |
-| `dry_run`               | boolean | `true`                           | Run the agent and the checks; write nothing                            |
-| `model`                 | string  | `claude-opus-5.5`                | Copilot CLI model identifier, lower-case                               |
-| `repositories`          | string  | `''`                             | Repositories to scan; commas and/or spaces; empty scans the owner      |
-| `exclude_repos`         | string  | `''`                             | Repositories to skip; commas and/or spaces; overrides the bundled list |
-| `max_targets`           | string  | `'20'`                           | Targets to hand to the agent at most; `0` lifts the cap                |
-| `max_concurrent_agents` | string  | `'5'`                            | Agent sessions running at once, 1-30                                   |
-| `max_runtime_minutes`   | string  | `'20'`                           | Wall-clock budget for each session, 1-120                              |
-| `skip_agent`            | boolean | `false`                          | Plumbing test: prepare and report without sessions                     |
-| `egress_policy`         | string  | `block`                          | `harden-runner` egress for trusted jobs: `audit` or `block`            |
-| `egress_allow_config`   | string  | `''`                             | `harden-runner-block-action` config coordinate                         |
-| `github_app_client_id`  | string  | `''`                             | GitHub App client id; empty limits runs to dry-run                     |
-| `assets_repository`     | string  | `lfreleng-actions/bots-template` | Trusted repository providing the prompt and scripts                    |
-| `assets_ref`            | string  | `''`                             | Commit, tag or branch of the assets; empty resolves the caller's SHA   |
+| Input                                  | Type    | Default                          | Meaning                                                                |
+| -------------------------------------- | ------- | -------------------------------- | ---------------------------------------------------------------------- |
+| `org`                                  | string  | required                         | Target owner; live runs require an organisation App                    |
+| `dry_run`                              | boolean | `true`                           | Run the agent and the checks; write nothing                            |
+| `model`                                | string  | `claude-opus-5.5`                | Copilot CLI model identifier, lower-case                               |
+| `repositories`                         | string  | `''`                             | Repositories to scan; commas and/or spaces; empty scans the owner      |
+| `exclude_repos`                        | string  | `''`                             | Repositories to skip; commas and/or spaces; overrides the bundled list |
+| `max_targets`                          | string  | `'20'`                           | Targets to hand to the agent at most; `0` lifts the cap                |
+| `max_concurrent_agents`                | string  | `'5'`                            | Agent sessions running at once, 1-30                                   |
+| `max_runtime_minutes`                  | string  | `'20'`                           | Wall-clock budget for each session, 1-120                              |
+| `skip_agent`                           | boolean | `false`                          | Plumbing test: prepare and report without sessions                     |
+| `harden_runner_egress`                 | string  | `block`                          | `harden-runner` egress for trusted jobs: `audit` or `block`            |
+| `harden_runner_allowlist`              | string  | `''`                             | `harden-runner-block-action` config coordinate                         |
+| `harden_runner_supplemental_allowlist` | string  | `''`                             | Second allow-list merged with the baseline; same coordinate grammar    |
+| `harden_runner_supplemental_unpinned`  | boolean | `false`                          | Let the supplemental list omit `@ref`; same-organisation lists alone   |
+| `harden_runner_extra_endpoints`        | string  | `''`                             | Inline `host[:port]` tokens merged into the allow-list                 |
+| `github_app_client_id`                 | string  | `''`                             | GitHub App client id; empty limits runs to dry-run                     |
+| `assets_repository`                    | string  | `lfreleng-actions/bots-template` | Trusted repository providing the prompt and scripts                    |
+| `assets_ref`                           | string  | `''`                             | Commit, tag or branch of the assets; empty resolves the caller's SHA   |
 
 <!-- markdownlint-enable MD013 -->
 

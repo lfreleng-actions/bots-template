@@ -179,15 +179,40 @@ class TopLevelContracts(ReusableWorkflowCase):
         for job in TRUSTED_JOBS:
             steps = self.steps(job)
             self.assertTrue(is_action(steps[0], BLOCK_ACTION), job)
-            self.assertEqual(steps[0]["if"], "inputs.egress_policy == 'block'")
+            self.assertEqual(steps[0]["if"], "inputs.harden_runner_egress == 'block'")
             self.assertTrue(is_action(steps[1], HARDEN_RUNNER), job)
             self.assertEqual(
-                steps[1]["with"]["egress-policy"], "${{ inputs.egress_policy }}"
+                steps[1]["with"]["egress-policy"], "${{ inputs.harden_runner_egress }}"
             )
         agent = self.steps("agent")
         self.assertTrue(is_action(agent[0], HARDEN_RUNNER))
         self.assertEqual(agent[0]["with"]["egress-policy"], "audit")
         self.assertEqual(self.actions("agent", BLOCK_ACTION), [])
+
+    def test_every_allow_list_loader_forwards_the_full_input_set(self) -> None:
+        """Each loader passes all five keys, so no site silently drops one.
+
+        The empty defaults must reach the action explicitly, and
+        supplemental_required is derived rather than exposed: a caller
+        naming a list depends on it.
+        """
+        expected = {
+            "config": "${{ inputs.harden_runner_allowlist }}",
+            "supplemental_config": "${{ inputs.harden_runner_supplemental_allowlist }}",
+            "supplemental_required": (
+                "${{ inputs.harden_runner_supplemental_allowlist != ''"
+                " && 'true' || 'false' }}"
+            ),
+            "supplemental_unpinned": (
+                "${{ inputs.harden_runner_supplemental_unpinned && 'true' || 'false' }}"
+            ),
+            "extra_endpoints": "${{ inputs.harden_runner_extra_endpoints }}",
+        }
+        for job in TRUSTED_JOBS:
+            loaders = self.actions(job, BLOCK_ACTION)
+            self.assertEqual(len(loaders), 1, job)
+            forwarded = {k: v for k, v in loaders[0]["with"].items() if k in expected}
+            self.assertEqual(forwarded, expected, job)
 
 
 class PrepareContracts(ReusableWorkflowCase):
@@ -561,8 +586,11 @@ class InputContracts(ReusableWorkflowCase):
                 "max_concurrent_agents",
                 "max_runtime_minutes",
                 "skip_agent",
-                "egress_policy",
-                "egress_allow_config",
+                "harden_runner_egress",
+                "harden_runner_allowlist",
+                "harden_runner_supplemental_allowlist",
+                "harden_runner_supplemental_unpinned",
+                "harden_runner_extra_endpoints",
                 "github_app_client_id",
                 "assets_repository",
                 "assets_ref",
@@ -580,7 +608,10 @@ class InputContracts(ReusableWorkflowCase):
         self.assertTrue(inputs["org"]["required"])
         self.assertTrue(inputs["dry_run"]["default"])
         self.assertFalse(inputs["skip_agent"]["default"])
-        self.assertEqual(inputs["egress_policy"]["default"], "block")
+        self.assertEqual(inputs["harden_runner_egress"]["default"], "block")
+        self.assertEqual(inputs["harden_runner_supplemental_allowlist"]["default"], "")
+        self.assertIs(inputs["harden_runner_supplemental_unpinned"]["default"], False)
+        self.assertEqual(inputs["harden_runner_extra_endpoints"]["default"], "")
         self.assertEqual(inputs["github_app_client_id"]["default"], "")
         self.assertEqual(inputs["max_targets"]["default"], "20")
         self.assertEqual(inputs["assets_ref"]["default"], "")
@@ -635,8 +666,8 @@ class CronContracts(WorkflowCase):
         )
         self.assertEqual(call["with"]["assets_repository"], "${{ github.repository }}")
         self.assertEqual(call["with"]["assets_ref"], "${{ github.sha }}")
-        self.assertEqual(call["with"]["egress_policy"], "block")
-        self.assertRegex(call["with"]["egress_allow_config"], ALLOW_CONFIG)
+        self.assertEqual(call["with"]["harden_runner_egress"], "block")
+        self.assertRegex(call["with"]["harden_runner_allowlist"], ALLOW_CONFIG)
         self.assertEqual(call["permissions"], CALLER_PERMISSIONS)
 
     def test_concurrency_keeps_dry_dispatches_out_of_the_live_group(self) -> None:
