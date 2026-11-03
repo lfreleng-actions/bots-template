@@ -115,9 +115,9 @@ jobs:
       model: "${{ needs.options.outputs.model }}"
       repositories: "${{ inputs.repositories || '' }}"
       max_targets: "${{ inputs.max_targets || '20' }}"
-      egress_policy: 'block'
+      harden_runner_egress: 'block'
       # yamllint disable-line rule:line-length
-      egress_allow_config: '@56d70f0eae78f334a598d1ffe071d4b821517b22'  # v0.17.1
+      harden_runner_allowlist: '@56d70f0eae78f334a598d1ffe071d4b821517b22'  # v0.17.1
       # Repository-level credentials reach the trusted prepare and
       # apply jobs, never an action in the agent job. No client id
       # permits dry-run fallback; a missing key fails token creation
