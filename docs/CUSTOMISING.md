@@ -134,6 +134,15 @@ return the URL. Return `None` and the result records `needs-human`
 with a reason. Keep the `result.json` shape; `report.py` and
 `ledger.record` read it.
 
+The write runs once. If the bot can read back whether it took effect,
+wrap it in `bot_github.write_with_recovery` so a transient 5xx during
+a GitHub incident does not cost the run. A review or comment found by
+a marker unique to the run takes `repeat_safe=False`: the helper
+recovers one that landed and lost its reply, but never sends it
+again, since a timed-out request can still land after the look.
+Retries are for writes a late first copy cannot duplicate, such as a
+compare-and-swap; DESIGN.md section 7.1 says which writes qualify.
+
 ### `report.py`
 
 `row_for` and `describe` render the columns the bot's results carry:

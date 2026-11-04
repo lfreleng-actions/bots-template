@@ -334,15 +334,57 @@ GitHub reads and writes through the `gh` CLI, kept apart from any
 policy so the rules in a bot's scripts stay readable.
 
 Public functions: `api_object`, `api_list` (paginated), `api_write`,
-`graphql`, `run_gh`, `is_absent`, `parse_status`, `require_str`,
-`require_int`, `require_sha` and `safe_message`. `GitHubError`
-carries the HTTP status its caller passes or, failing that, the one
-`parse_status` finds at the end of a line of `gh`'s stderr, in either
-form `gh` prints it: `(HTTP 404)` after a JSON message, or
-`gh: HTTP 403` alone for any other reply. Reads retry three times on
-`500`-`504` with a two-second delay; writes never retry. Every call
-has a sixty-second timeout and pins `API_VERSION`. `REPO_RE` and
-`SHA_RE` are the patterns the other modules share.
+`graphql`, `run_gh`, `write_with_recovery`, `is_transient`,
+`is_absent`, `parse_status`, `require_str`, `require_int`,
+`require_sha` and `safe_message`. `GitHubError` carries the HTTP
+status its caller passes or, failing that, the one `parse_status`
+finds at the end of a line of `gh`'s stderr, in either form `gh`
+prints it: `(HTTP 404)` after a JSON message, or `gh: HTTP 403` alone
+for any other reply. Reads retry three times on a transient failure
+with a two-second delay. `is_transient` decides: an HTTP status
+settles it on its own, transient for `500`-`504` and for nothing
+else, and the wording of a timeout counts when the failure carries no
+status, since GitHub's reply text reaches the message and a `422`
+that mentions a timeout is still a `422`.
+Every call has a sixty-second timeout and pins `API_VERSION`.
+`REPO_RE` and `SHA_RE` are the patterns the other modules share.
+
+Writes run once. A transient failure on a write is ambiguous: GitHub
+may have applied it and lost the reply, or may still be applying it,
+and repeating it could apply it twice, so `run_gh` never repeats one.
+A caller that can tell whether its write took effect makes it
+recoverable instead, with `write_with_recovery(write, landed,
+repeat_safe=...)`. After a transient failure the helper calls
+`landed`, which reads back the resource the write would have changed
+and returns the write's result if it took effect, or `None` if it has
+not. A landed write returns that result. A `landed` that fails never
+counts as "not landed": the write fails with both errors and keeps
+the write's own status. A failure that is not transient raises at
+once. The helper reports each retry and recovery on stderr.
+
+What happens when `landed` finds nothing depends on `repeat_safe`,
+which every caller must state. "Not landed yet" is not "will not
+land": a timed-out request can still finish after the look.
+
+- **Repeat-safe** writes are those a late first copy cannot combine
+  with a second: a compare-and-swap such as `createCommitOnBranch`,
+  whose `expectedHeadOid` makes the second commit fail if the first
+  arrives, or an idempotent call such as a fork sync. The helper tries
+  one again after 2, 6 and then 18 seconds, four tries in all, spaced
+  to ride out an incident rather than a blip, and checks the last
+  failure too. Its `landed` must still recognise this write's own
+  effect: for a commit, a branch head that names a child of the
+  expected commit with this commit's tree and message, not any change.
+- **Other** writes, those a read-back can find by nothing but a marker
+  unique to the run, such as a review or comment body, are not
+  repeat-safe: the marker
+  proves a write landed when present, but its absence does not prove
+  the request is over. With `repeat_safe=False` the helper looks once,
+  returns a write that landed, and otherwise fails without writing
+  again. That still recovers the common case, a write that landed
+  and lost its reply, without risking a duplicate.
+
+A write with no read-back at all stays single-shot.
 
 A bot's `prepare.py` and `apply.py` import it for every GitHub call.
 Nothing here decides whether the bot may act; callers decide that

@@ -14,8 +14,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import time
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 API_VERSION = "2026-03-10"
 # gh ends its message with the status in one of two forms: after the
@@ -29,6 +31,11 @@ TIMEOUT_SECONDS = 60
 TRANSIENT = frozenset({500, 502, 503, 504})
 READ_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 2
+# A recoverable write waits longer between tries than a read does: a
+# read retries through a blip, a write is retried through an incident,
+# where GitHub answers 5xx for minutes rather than seconds.
+WRITE_RETRY_DELAYS_SECONDS = (2, 6, 18)
+WRITE_ATTEMPTS = len(WRITE_RETRY_DELAYS_SECONDS) + 1
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
 # gh prints a failed call's JSON reply on stdout and keeps only its
@@ -62,6 +69,22 @@ class GitHubError(Exception):
         self.status: int | None = (
             status if status is not None else parse_status(message)
         )
+
+
+T = TypeVar("T")
+
+
+def is_transient(exc: GitHubError) -> bool:
+    """Whether a failure may pass if the same call is made again.
+
+    An HTTP status decides on its own: GitHub's reply text reaches the
+    message, so a 422 whose detail mentions a timeout is still a 422.
+    The "timed out" wording counts only for a failure with no status,
+    such as gh's own timeout.
+    """
+    if exc.status is not None:
+        return exc.status in TRANSIENT
+    return "timed out" in str(exc)
 
 
 def is_read(args: list[str]) -> bool:
@@ -148,9 +171,11 @@ def run_gh(
 
     Reads retry a transient 5xx or timeout with a short backoff: a
     selection makes many reads, and one 502 should not cost the run.
-    Writes run once; a repeated review submission is not harmless.
-    ``read`` overrides the guess from the arguments, for a GraphQL
-    query the caller knows to be read-only.
+    Writes run once; a repeated review submission is not harmless. A
+    caller that can tell whether a write took effect makes it
+    recoverable with :func:`write_with_recovery` instead. ``read``
+    overrides the guess from the arguments, for a GraphQL query the
+    caller knows to be read-only.
     """
     if args[:1] == ["api"] and args[1:2] != ["graphql"]:
         args = [*args, "--header", f"X-GitHub-Api-Version: {API_VERSION}"]
@@ -160,11 +185,104 @@ def run_gh(
         try:
             return run_once(args, input)
         except GitHubError as exc:
-            transient = exc.status in TRANSIENT or "timed out" in str(exc)
-            if attempt == attempts or not transient:
+            if attempt == attempts or not is_transient(exc):
                 raise
             time.sleep(RETRY_DELAY_SECONDS * attempt)
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+def write_with_recovery(
+    write: Callable[[], T],
+    landed: Callable[[], T | None],
+    *,
+    repeat_safe: bool,
+    attempts: int | None = None,
+    label: str = "write",
+) -> T:
+    """Run a write once, and recover it from a transient failure.
+
+    A 5xx or a timeout on a write is ambiguous: GitHub may have applied
+    it and lost the reply, or may still be applying it. Repeating it
+    blindly could apply it twice, which is why ``run_gh`` never retries
+    a write.
+
+    ``write`` performs the write and returns its result. ``landed``
+    reads the resource the write would have changed and returns the
+    result the write would have returned when it took effect, or
+    ``None`` when it has not. Only ``None`` means "not landed". After a
+    transient failure, ``landed`` is consulted, and a write that landed
+    returns that result.
+
+    ``repeat_safe`` is the caller's statement, required at every call,
+    of whether the write may be sent again when ``landed`` finds no
+    effect. "Not landed yet" is not "will not land": a timed-out request
+    can still be processed after the look. A write is repeat-safe when
+    a late first copy cannot combine with a second, as with a
+    compare-and-swap (``createCommitOnBranch``'s ``expectedHeadOid``:
+    the second commit fails if the first arrives) or an idempotent
+    call (syncing a fork). Such a write is tried again after
+    ``WRITE_RETRY_DELAYS_SECONDS``, up to ``attempts`` in all, default
+    ``WRITE_ATTEMPTS``. A write found only by a marker, such as a
+    review or comment carrying the run's identifier, is not
+    repeat-safe: the marker proves a write landed when present, but
+    its absence does not prove the request is finished. With
+    ``repeat_safe=False`` the helper looks once and never writes again.
+
+    ``landed`` is consulted after the last failure too, since that
+    write may also have landed. A failure ``landed`` cannot settle is
+    never read as "not landed": when it raises, the write fails with
+    both errors and keeps the write's own status. A failure that is not
+    transient raises at once, without a look, as it always has.
+    ``landed`` must recognise this write's own effect, not merely some
+    change.
+
+    Raises:
+        GitHubError: The write failed and did not land, failed with a
+            non-transient error, or could not be checked.
+        ValueError: ``attempts`` is outside 1 to ``WRITE_ATTEMPTS``, or
+            above 1 for a write that is not repeat-safe.
+    """
+    if attempts is None:
+        attempts = WRITE_ATTEMPTS if repeat_safe else 1
+    if not 1 <= attempts <= WRITE_ATTEMPTS:
+        raise ValueError(f"attempts must be 1 to {WRITE_ATTEMPTS}, not {attempts}")
+    if attempts > 1 and not repeat_safe:
+        raise ValueError("a write that is not repeat-safe is attempted once")
+    for attempt in range(1, attempts + 1):
+        try:
+            return write()
+        except GitHubError as exc:
+            if not is_transient(exc):
+                raise
+            try:
+                outcome = landed()
+            except GitHubError as lookup:
+                unknown = GitHubError(
+                    f"{exc}; could not tell whether the {label} landed: {lookup}"
+                )
+                # The write's own status, even None for a timeout: left to
+                # the constructor, None means "parse the message", which
+                # would take the look's status, and a 404 from the look
+                # would then read as the write's target being absent.
+                unknown.status = exc.status
+                raise unknown from lookup
+            if outcome is not None:
+                note(f"{label}: landed despite {safe_message(exc)}")
+                return outcome
+            if attempt == attempts:
+                raise
+            delay = WRITE_RETRY_DELAYS_SECONDS[attempt - 1]
+            note(
+                f"{label}: attempt {attempt} of {attempts} did not land "
+                f"({safe_message(exc)}); retrying in {delay}s"
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def note(message: str) -> None:
+    """Report a recovered or retried write on stderr, never stdout."""
+    print(message, file=sys.stderr)
 
 
 def decode_response(raw: str) -> Any:
