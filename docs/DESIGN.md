@@ -192,8 +192,11 @@ before any `create-github-app-token` step, and fails the run closed.
 
 <!-- markdownlint-enable MD013 -->
 
-The gate costs about half a minute per run: a `uv` setup and a
-`zizmor` install from PyPI, which the allow-list already carries.
+The gate costs about half a minute per run: a `uv` setup, a
+uv-managed Python from `releases.astral.sh` (pinned and hash-checked
+by uv) that every later uv call takes by absolute path, so nothing in
+the job's environment can choose the interpreter, and a `zizmor`
+install from PyPI; the allow-list already carries both hosts.
 Everything it checks is a file already on the runner or a value the
 workflow already holds; it introduces nothing new to trust. A run it
 fails is a run that must not proceed, and the error annotation names
