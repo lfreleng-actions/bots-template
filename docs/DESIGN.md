@@ -359,8 +359,12 @@ repeat_safe=...)`. After a transient failure the helper calls
 and returns the write's result if it took effect, or `None` if it has
 not. A landed write returns that result. A `landed` that fails never
 counts as "not landed": the write fails with both errors and keeps
-the write's own status. A failure that is not transient raises at
-once. The helper reports each retry and recovery on stderr.
+the write's own status. A first attempt that fails without a
+transient error raises at once. When a retry fails that way, the
+helper looks again and never resends it: a timed-out earlier copy can
+land during the wait, and a compare-and-swap then refuses the retry
+because of it, so the refusal may hide a write that took effect. The helper reports
+each retry and recovery on stderr.
 
 What happens when `landed` finds nothing depends on `repeat_safe`,
 which every caller must state. "Not landed yet" is not "will not
