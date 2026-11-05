@@ -487,7 +487,9 @@ repeat the same work every run, but a live run ignores dry-run
 entries: the first live run after the flip must still act on what
 dry runs reported. `already_assessed` encodes the asymmetry: a
 live entry always counts; a dry-run entry counts for another dry run
-alone.
+alone. `merge` keeps the newest entry of each mode for a head, so a
+dry run after a live one never erases the live assessment that a
+later live run relies on.
 
 The placeholder `prepare.py` requires the ledger file to exist and
 passes it through; a bot's selection calls `already_assessed` on each
