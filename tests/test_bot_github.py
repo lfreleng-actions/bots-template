@@ -109,7 +109,6 @@ class RunGhTest(unittest.TestCase):
             self.assertEqual(github.run_gh(["api", "repos/o/r"]), "ok")
         self.assertEqual(run.call_count, 2)
 
-    @unittest.expectedFailure
     def test_a_reply_cut_short_is_retried(self) -> None:
         """gh's wording for an unreadable error body carries no status."""
         replies = [
@@ -423,7 +422,6 @@ class WriteWithRecoveryTest(unittest.TestCase):
             )
         self.assertEqual(len(calls), 2)
 
-    @unittest.expectedFailure
     def test_a_reply_cut_short_is_looked_at(self) -> None:
         """An error body gh could not read may hide a write that landed."""
         cut = github.GitHubError("unexpected end of JSON input")
@@ -434,7 +432,6 @@ class WriteWithRecoveryTest(unittest.TestCase):
             )
         self.assertEqual(len(calls), 1)
 
-    @unittest.expectedFailure
     def test_graphql_internal_error_is_looked_at_and_retried(self) -> None:
         """GitHub's "Something went wrong" is a 5xx in all but its status."""
         failed = github.GitHubError(
@@ -567,7 +564,6 @@ class TransientWordingTest(unittest.TestCase):
         ' query. Please include `D443:353A81` when reporting this issue."}]',
     )
 
-    @unittest.expectedFailure
     def test_each_wording_without_a_status_is_transient(self) -> None:
         """A reply gh could not read is as ambiguous as a 5xx."""
         for message in self.CUT_SHORT:
