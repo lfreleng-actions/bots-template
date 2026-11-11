@@ -346,9 +346,15 @@ prints it: `(HTTP 404)` after a JSON message, or `gh: HTTP 403` alone
 for any other reply. Reads retry three times on a transient failure
 with a two-second delay. `is_transient` decides: an HTTP status
 settles it on its own, transient for `500`-`504` and for nothing
-else, and the wording of a timeout counts when the failure carries no
-status, since GitHub's reply text reaches the message and a `422`
-that mentions a timeout is still a `422`.
+else, since GitHub's reply text reaches the message and a `422` that
+mentions a timeout is still a `422`. When the failure carries no
+status, the wordings in `TRANSIENT_WORDINGS` count, matched as whole
+words: gh's own timeout, an error reply whose body gh could not read
+(`unexpected end of JSON input`, which drops the status gh would
+otherwise print), a connection the server closed (`EOF`), a transport
+timeout, and GitHub's internal error on GraphQL, which arrives as a
+`200` with one message. A wrong host, a refused port and gh's usage
+errors stay fatal: they repeat.
 Every call has a sixty-second timeout and pins `API_VERSION`.
 `REPO_RE` and `SHA_RE` are the patterns the other modules share.
 
