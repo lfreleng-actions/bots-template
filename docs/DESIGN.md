@@ -274,7 +274,7 @@ report as rows whose reason names a missing session.
 ### 5.4 Models
 
 The default model is `claude-opus-5.5`. The cron caller's dispatch
-form offers Claude Opus 5.5, Claude Fable 5.1, Claude Sonnet 5.5 and
+form offers Claude Opus 5.5, Claude Fable 5.2, Claude Sonnet 5.5 and
 GPT-6 Astra as display names and maps each to the identifier the CLI
 accepts. The selection records the model, and `usage.json` supplies
 the session's cost figures, which a bot's report may sum.
