@@ -277,7 +277,11 @@ The default model is `claude-opus-5.5`. The cron caller's dispatch
 form offers Claude Opus 5.5, Claude Fable 5.2, Claude Sonnet 5.5 and
 GPT-6 Astra as display names and maps each to the identifier the CLI
 accepts. The selection records the model, and `usage.json` supplies
-the session's cost figures, which a bot's report may sum.
+the session's spend and token usage by model. `apply` reads it
+through `bot_evidence.session_usage` into `check.json` and
+`result.json`, and the report sums it by model, so the organisation
+can compare what each model consumes after the session artifact
+expires.
 
 ## 6. The Copilot CLI harness
 
@@ -405,9 +409,9 @@ first.
 
 ### 7.2 `bot_evidence.py`
 
-Two parts: the `verify` command the workflow runs in every consumer
-job, and the cap table for what an untrusted session may hand to a
-trusted job.
+Three parts: the `verify` command the workflow runs in every
+consumer job, the cap table for what an untrusted session may hand
+to a trusted job, and the reader for the session's usage.
 
 `verify --directory DIR --expect NAME=SHA256 [--expect ...]` checks
 the exact bytes of each named file against the digest the trusted
@@ -421,6 +425,28 @@ file they open.
 
 A bot that needs more from its sessions extends `SESSION_FILES`;
 the trusted jobs read nothing else from a session.
+
+`session_usage` takes the parsed `usage.json`, in the shape
+`@github/copilot` 1.0.105 writes, and returns three fields:
+`premium_requests` from `totalPremiumRequestCost`, `agent_seconds`
+from `totalApiDurationMs` in whole seconds, rounded down, and
+`usage`: the session's `nano_aiu` and `last_call_input_tokens`, and
+for each model its `requests`, `premium_requests`, `input_tokens`
+(cache reads and writes included), `cache_read_tokens`,
+`cache_write_tokens`, `output_tokens`, `reasoning_tokens` and
+`nano_aiu`. The file comes from the agent job, so each figure must
+be a finite, non-negative number and not a boolean, and the reader
+stores a count as an integer. It keeps a model whose name matches
+`^[a-z0-9.-]+$` within 100 characters and that carries at least one
+figure: at most eight, sorted by name. It leaves out a field that
+fails, and nothing raises. With no file, or one that is not a JSON
+object, all three fields are null; `usage` is null too when the file
+holds none of its figures. `usage_totals` and `spend_totals` sum
+result files by model and for the run, checking each figure again,
+since a result file is a claim too, and never carrying a total past
+a finite number. One reader in the shared module keeps the record
+the same in every bot, and gives one place to change when the CLI
+changes the file.
 
 ### 7.3 `artifact_fetch.py`
 
@@ -877,6 +903,18 @@ adds the fields its corroboration reads.
   "summary": "bounded to 2000 characters",
   "findings": [{"area": "other", "note": "..."}],
   "injection_attempts": [],
+  "premium_requests": 1.0,
+  "agent_seconds": 31,
+  "usage": {
+    "nano_aiu": 51939650000,
+    "last_call_input_tokens": 30972,
+    "models": [
+      {"model": "gpt-6-astra", "requests": 7, "premium_requests": 1.0,
+       "input_tokens": 122814, "cache_read_tokens": 91824,
+       "cache_write_tokens": 30969, "output_tokens": 805,
+       "reasoning_tokens": 80, "nano_aiu": 51939650000}
+    ]
+  },
   "reasons": ["the session ended without a verdict block"]
 }
 ```
@@ -895,6 +933,12 @@ JSON, cut the same way, so a report the agent made in the wrong
 shape still reaches a human. Both are empty when there is no verdict
 block or the field is not a list.
 
+`premium_requests`, `agent_seconds` and `usage` are what
+`bot_evidence.session_usage` reads from the accepted `usage.json`
+(section 7.2). They are null when the session has no usage file,
+when the file is unreadable or not a JSON object, and when the fetch
+reported a failure; usage never stops the check.
+
 ### 15.6 `result.json` (apply, per target; trusted)
 
 ```json
@@ -909,6 +953,9 @@ block or the field is not a list.
   "summary": "...",
   "findings": [],
   "injection_attempts": [],
+  "premium_requests": 1.0,
+  "agent_seconds": 31,
+  "usage": {"models": [{"model": "gpt-6-astra", "requests": 7}]},
   "write_url": null,
   "dry_run": true,
   "run_attempt": 1,
@@ -920,7 +967,8 @@ block or the field is not a list.
 live write returned a URL, `needs-human` when it did not or the check
 refused, and `failed` when the fetch failed or, through the
 workflow's fallback step, when apply did not complete. `apply`
-carries `findings` and `injection_attempts` on from `check.json`. The
+carries `findings`, `injection_attempts` and the three usage fields
+on from `check.json`. The
 fallback writes the identity, verdict, reasons and run fields with
 `repo_name` added, so every selected target reaches the report; a
 reader treats a field the fallback leaves out as absent.
@@ -937,7 +985,16 @@ reader treats a field the fallback leaves out as absent.
      "number": 157, "head_sha": "<40 hex>", "verdict": "would-do",
      "reasons": [], "write_url": null}
   ],
-  "recorded": 1
+  "recorded": 1,
+  "premium_requests": 2.0,
+  "agent_seconds": 62,
+  "usage": [
+    {"model": "gpt-6-astra", "sessions": 2, "requests": 14,
+     "premium_requests": 2.0, "input_tokens": 245628,
+     "cache_read_tokens": 183648, "cache_write_tokens": 61938,
+     "output_tokens": 1610, "reasoning_tokens": 160,
+     "nano_aiu": 103879300000}
+  ]
 }
 ```
 
@@ -946,6 +1003,17 @@ unrecorded. `report.md` renders one row per target with its verdict
 and reasons; a bot's `row_for` and `describe` add the columns its
 results carry. `recorded` counts the entries this run added to the
 ledger.
+
+`premium_requests` and `agent_seconds` total the selected targets'
+results; `usage` sums their usage records by model, with the number
+of sessions that used each model, sorted by name. Both come from
+`bot_evidence.spend_totals` and `usage_totals`, which check each
+figure again as they sum it: a result file is a claim, so a figure
+that is absent or malformed, a model name outside the pattern, a
+model past the eighth in one result, or a figure that would carry a
+total past a finite number adds nothing. A figure a model never
+reported totals 0. `report.md` renders the totals and a table of
+usage by model under a Spend heading, or says it holds no usage.
 
 ## 16. What the template leaves to each bot
 

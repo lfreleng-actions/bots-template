@@ -166,6 +166,14 @@ a tier, a label set, a pull request URL. The ledger entries stay as
 `ledger.py` defines them; a bot that wants to remember more extends
 `check_entry` in the shared module and proposes it to the template.
 
+Keep `describe_spend` and the `premium_requests`, `agent_seconds`
+and `usage` totals in `report.json`. They sum what `apply` carried
+into each result through `bot_evidence.usage_totals` and
+`spend_totals`, which check every figure again, so every bot reports
+spend and token usage by model in the same shape. A bot whose
+results hold usage under other names maps them to these fields
+rather than summing them its own way.
+
 ## Adding an input
 
 An input touches three files and one test:

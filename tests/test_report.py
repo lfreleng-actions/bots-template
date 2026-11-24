@@ -132,7 +132,6 @@ class ReportTest(unittest.TestCase):
         gathered = report.gather_results(self.root / "results")
         self.assertEqual(gathered["a"]["verdict"], "would-do")
 
-    @unittest.expectedFailure
     def test_spend_and_usage_reach_the_report(self) -> None:
         """Each result's usage is summed by model; a fallback adds nothing."""
         self.write_selection(target("a", 1), target("b", 2), target("c", 3))
@@ -157,7 +156,6 @@ class ReportTest(unittest.TestCase):
         self.assertIn("| Model | Sessions | Requests | Premium requests |", text)
         self.assertIn("| gpt-6-astra | 2 | 14 | 2.0 | 0 |", text)
 
-    @unittest.expectedFailure
     def test_no_usage_renders_no_table(self) -> None:
         """Without a usage record the report says so, and nothing breaks."""
         self.write_selection(target("a", 1))

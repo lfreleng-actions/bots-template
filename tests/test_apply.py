@@ -360,7 +360,6 @@ class MainTest(unittest.TestCase):
         _, checked = self.run_check()
         self.assertEqual(checked["findings"], [])
 
-    @unittest.expectedFailure
     def test_session_usage_reaches_check_and_result(self) -> None:
         """The accepted usage.json is read once and carried through."""
         usage = {
@@ -380,7 +379,6 @@ class MainTest(unittest.TestCase):
         for written in (checked, result):
             self.assertEqual({k: written[k] for k in expected}, expected)
 
-    @unittest.expectedFailure
     def test_absent_or_unreadable_usage_is_null(self) -> None:
         """No usage.json, or one that is not JSON, records nulls and still checks."""
         self.write_session(summary_with(json.dumps(block())))

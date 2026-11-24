@@ -5,7 +5,8 @@
 
 ``check`` takes the final fenced block of the accepted
 ``session-summary.md``, which must be ``json``, as the verdict,
-refuses one about another target, writes ``check.json`` and prints
+refuses one about another target, writes ``check.json`` with the
+session's usage from ``bot_evidence.session_usage``, and prints
 ``approvable=true`` when the write mint may run. ``apply`` turns the
 check into ``result.json``: a dry run records what it would have
 done, a live run makes the write.
@@ -21,7 +22,7 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
-from bot_evidence import MAX_SUMMARY_BYTES, read_regular
+from bot_evidence import MAX_SUMMARY_BYTES, MAX_USAGE_BYTES, read_regular, session_usage
 
 SCHEMA = 1
 AGENT_VERDICTS = frozenset({"act", "needs-human"})
@@ -36,6 +37,7 @@ LIST_FIELDS = ("findings", "injection_attempts")
 MAX_LISTED = 20
 MAX_ENTRY_CHARS = 400
 INJECTION_REPORTED = "the agent reported an injection attempt"
+USAGE_FIELDS = ("premium_requests", "agent_seconds", "usage")
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -155,6 +157,16 @@ def check_verdict(target: dict[str, Any], block: dict[str, Any] | None) -> list[
     return [reason for faulty, reason in faults if faulty]
 
 
+def read_usage(session_dir: Path) -> dict[str, Any]:
+    """The session's spend and token usage; nulls when usage.json is unreadable."""
+    try:
+        raw = read_regular(session_dir / "usage.json", MAX_USAGE_BYTES)
+        parsed: Any = json.loads(raw)
+    except (OSError, ValueError, RecursionError):
+        parsed = None
+    return session_usage(parsed)
+
+
 def check(args: argparse.Namespace) -> None:
     """Write check.json and the step summary; print the approvable flag."""
     target = find_target(load_json(args.selection), args.key)
@@ -171,6 +183,9 @@ def check(args: argparse.Namespace) -> None:
     checked["findings"] = [finding_record(f) for f in listed(block, "findings")]
     attempts = listed(block, "injection_attempts")
     checked["injection_attempts"] = [entry_text(a) for a in attempts]
+    checked.update(
+        session_usage(None) if args.failure else read_usage(args.session_dir)
+    )
     write_json(args.output, {**checked, "reasons": reasons})
     state = "approvable" if approvable else "not approvable"
     heading = f"### `{target['repository']}#{target['number']}`: {state}\n\n"
@@ -200,6 +215,7 @@ def apply(args: argparse.Namespace) -> None:
     result: dict[str, Any] = {"schema": SCHEMA, **target, "verdict": verdict}
     result.update(reasons=reasons, summary=checked.get("summary"), write_url=url)
     result.update({field: checked.get(field, []) for field in LIST_FIELDS})
+    result.update({field: checked.get(field) for field in USAGE_FIELDS})
     result.update(dry_run=args.dry_run, run_attempt=args.run_attempt)
     write_json(args.output, {**result, "run_url": args.run_url})
     print(f"apply: {target['repository']}#{target['number']} -> {verdict}")
