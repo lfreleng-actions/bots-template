@@ -129,15 +129,18 @@ A bot that renames the verdict tokens changes `AGENT_VERDICTS` in
 ### `apply.py`
 
 `check` reads the final fenced block of the accepted summary, which
-must be `json`, refuses one about another target, and prints
-`approvable=true` when the write mint may run. Keep
-`final_json_block`: it reads the untrusted summary in one pass, and
-an earlier block never stands in for a missing verdict. A bot
-extends `check_verdict` with its own corroboration: a deterministic
-classifier over the packet, a veto list, a cross-check of the
-agent's findings against the selection. Everything the check reads
-comes from `selection.json` and the bounded session; it has no token
-and makes no network call.
+must be `json`, refuses one about another target or one that reports
+an injection attempt, and prints `approvable=true` when the write
+mint may run. Keep `final_json_block`: it reads the untrusted summary
+in one pass, and an earlier block never stands in for a missing
+verdict. Keep the injection refusal too, and the bounded `findings`
+and `injection_attempts` that `check.json` and `result.json` record;
+what an `act` verdict with findings means is the bot's decision. A
+bot extends `check_verdict` with its own corroboration: a
+deterministic classifier over the packet, a veto list, a cross-check
+of the agent's findings against the selection. Everything the check
+reads comes from `selection.json` and the bounded session; it has no
+token and makes no network call.
 
 `apply` runs after the mint. `perform_write(target, summary)` holds
 the bot's one write: re-read the live target with the token in

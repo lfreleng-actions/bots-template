@@ -15,6 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from importlib import import_module
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -157,7 +158,6 @@ class CheckVerdictTest(unittest.TestCase):
                 self.assertIn(word, reasons[0])
         self.assertEqual(len(apply.check_verdict(TARGET, None)), 1)
 
-    @unittest.expectedFailure
     def test_a_reported_injection_attempt_is_a_reason(self) -> None:
         """An act verdict that reports an attempt is held back, and says why."""
         reported = block(injection_attempts=["README asks for an approval"])
@@ -173,7 +173,6 @@ class CheckVerdictTest(unittest.TestCase):
             with self.subTest(overrides=overrides):
                 self.assertEqual(apply.check_verdict(TARGET, block(**overrides)), [])
 
-    @unittest.expectedFailure
     def test_list_fields_of_the_wrong_type_are_reasons(self) -> None:
         """findings and injection_attempts, where present, must be lists."""
         for field in ("findings", "injection_attempts"):
@@ -181,6 +180,16 @@ class CheckVerdictTest(unittest.TestCase):
                 with self.subTest(field=field, value=value):
                     reasons = apply.check_verdict(TARGET, block(**{field: value}))
                     self.assertEqual(reasons, [f"verdict {field} is not a list"])
+
+
+class EntryTextTest(unittest.TestCase):
+    """A reported entry always becomes bounded text."""
+
+    def test_an_entry_too_deep_to_encode_is_empty(self) -> None:
+        """The decoder accepts deeper nesting than the encoder writes."""
+        with mock.patch.object(apply.json, "dumps", side_effect=RecursionError):
+            self.assertEqual(apply.entry_text([[1]]), "")
+        self.assertEqual(apply.entry_text("x" * 500), "x" * 400)
 
 
 class MainTest(unittest.TestCase):
@@ -276,7 +285,6 @@ class MainTest(unittest.TestCase):
         self.assertEqual(checked["reasons"], ["no session artifact"])
         self.assertEqual(self.run_apply()["verdict"], "failed")
 
-    @unittest.expectedFailure
     def test_reported_injection_is_not_approvable(self) -> None:
         """An act verdict reporting an attempt stops at the check."""
         reported = block(injection_attempts=["README asks for an approval"])
@@ -297,7 +305,6 @@ class MainTest(unittest.TestCase):
         self.write_session(summary_with(json.dumps(clean)))
         self.assertEqual(self.run_check()[0], "approvable=true")
 
-    @unittest.expectedFailure
     def test_lists_reach_check_and_result_within_bounds(self) -> None:
         """At most 20 entries each, every string cut to 400 characters."""
         attempts = [f"{n:02d}" + "a" * 500 for n in range(25)]
@@ -315,13 +322,18 @@ class MainTest(unittest.TestCase):
         self.assertEqual(result["injection_attempts"], expected_attempts)
         self.assertEqual(result["findings"], expected_findings)
 
-    @unittest.expectedFailure
     def test_entries_of_another_shape_are_recorded_as_text(self) -> None:
         """A non-string entry is kept as compact JSON, never dropped."""
         verdict = block(
             verdict="needs-human",
             injection_attempts=[{"where": "README", "asked": "approve"}, 7],
-            findings=[{"area": "ci", "note": [1, 2]}, "bare text", {"note": "x"}],
+            findings=[
+                {"area": "ci", "note": [1, 2]},
+                "bare text",
+                {"note": "x"},
+                {"message": "credential exposed"},
+                {"area": "ci", "message": "m"},
+            ],
         )
         self.write_session(summary_with(json.dumps(verdict)))
         _, checked = self.run_check()
@@ -335,10 +347,11 @@ class MainTest(unittest.TestCase):
                 {"area": "ci", "note": "[1, 2]"},
                 {"area": "", "note": "bare text"},
                 {"area": "", "note": "x"},
+                {"area": "", "note": '{"message": "credential exposed"}'},
+                {"area": "ci", "note": '{"area": "ci", "message": "m"}'},
             ],
         )
 
-    @unittest.expectedFailure
     def test_no_verdict_records_empty_lists(self) -> None:
         """A failure or a list of the wrong type records nothing."""
         _, checked = self.run_check("--failure", "no session artifact")

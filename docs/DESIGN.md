@@ -856,10 +856,14 @@ the final fence never closes, there is no verdict, and an earlier
 `verdict` is `act` or `needs-human`. The placeholder check refuses a
 block whose `schema` is not 1, whose `repository`, `number` or
 `head_sha` differs from the trusted target, whose verdict token is
-unknown or whose `summary` is not a string. A bot renames the
-verdict tokens to its own vocabulary in `prompt/task.md` and
-`AGENT_VERDICTS` together, and adds the fields its corroboration
-reads.
+unknown, whose `summary` is not a string, or whose `findings` or
+`injection_attempts`, where present, is not a list. It also refuses
+to act on a block that reports any injection attempt, with the
+reason `the agent reported an injection attempt`: the agent saw the
+packet try to steer it, and a human should see what it saw before
+the bot writes anything. A bot renames the verdict tokens to its own
+vocabulary in `prompt/task.md` and `AGENT_VERDICTS` together, and
+adds the fields its corroboration reads.
 
 ### 15.5 `check.json` (apply, offline; trusted)
 
@@ -871,6 +875,8 @@ reads.
              "number": 157, "head_sha": "<40 hex>"},
   "verdict": "needs-human",
   "summary": "bounded to 2000 characters",
+  "findings": [{"area": "other", "note": "..."}],
+  "injection_attempts": [],
   "reasons": ["the session ended without a verdict block"]
 }
 ```
@@ -880,6 +886,14 @@ said `act`; the step prints `approvable=true|false` as its output
 and the write mint runs on `true`, off dry-run, with a client id.
 `verdict` is `failed` when the fetch reported a missing or refused
 session and `needs-human` otherwise; `apply` promotes it.
+
+`findings` and `injection_attempts` record what the agent reported,
+bounded as the review bot bounds them: the first 20 entries of each,
+every string cut to 400 characters. A finding keeps its `area` and
+`note`; the check keeps an entry of another shape as its compact
+JSON, cut the same way, so a report the agent made in the wrong
+shape still reaches a human. Both are empty when there is no verdict
+block or the field is not a list.
 
 ### 15.6 `result.json` (apply, per target; trusted)
 
@@ -893,6 +907,8 @@ session and `needs-human` otherwise; `apply` promotes it.
   "verdict": "would-do",
   "reasons": [],
   "summary": "...",
+  "findings": [],
+  "injection_attempts": [],
   "write_url": null,
   "dry_run": true,
   "run_attempt": 1,
@@ -903,9 +919,11 @@ session and `needs-human` otherwise; `apply` promotes it.
 `verdict` is `would-do` on an approvable dry run, `done` when the
 live write returned a URL, `needs-human` when it did not or the check
 refused, and `failed` when the fetch failed or, through the
-workflow's fallback step, when apply did not complete. The fallback
-writes the same shape with `repo_name` added, so every selected
-target reaches the report.
+workflow's fallback step, when apply did not complete. `apply`
+carries `findings` and `injection_attempts` on from `check.json`. The
+fallback writes the identity, verdict, reasons and run fields with
+`repo_name` added, so every selected target reaches the report; a
+reader treats a field the fallback leaves out as absent.
 
 ### 15.7 `report.json` and `report.md` (report; trusted)
 
