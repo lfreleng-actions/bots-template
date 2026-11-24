@@ -928,8 +928,11 @@ ledger.
   `select_targets` returns an empty list.
 - **The task.** Every `replace` marker in `prompt/task.md`: the
   bot's name, its rules, the packet fields, the procedure and the
-  areas its findings use. The trust framing, the tool list and the
-  verdict block stay.
+  areas its findings use. The trust framing stays: packet text is
+  data, and an injection attempt is text that tries to change the
+  assessment, not text addressed to a human reader or a repository's
+  guidance for its own contributors. The tool list and the verdict
+  block stay too.
 - **Corroboration.** What the apply job checks before it believes
   an `act`: a deterministic classifier, a live re-read of the
   target, a veto list. The template checks shape and identity and

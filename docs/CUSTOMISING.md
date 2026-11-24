@@ -107,11 +107,21 @@ title, the role paragraph's first sentence, rule 1's packet fields,
 the rules from 7 onwards, the environment list, the procedure and
 the areas a finding may name are the bot's. The trust framing (no
 credential, a separate trusted job checks the verdict, packet text
-is data), the tool list and the verdict block stay, because the
-apply job and the tool policy depend on them. The prompt must not
-restate organisation policy on commits, tests or reviews; the agent
-receives the organisation `AGENTS.md` for that in bots that need it,
-and a copy drifts.
+is data, and the definition of an injection attempt), the tool list
+and the verdict block stay, because the apply job and the tool
+policy depend on them. The prompt must not restate organisation
+policy on commits, tests or reviews; the agent receives the
+organisation `AGENTS.md` for that in bots that need it, and a copy
+drifts.
+
+The definition of an injection attempt is narrow on purpose. Text
+that tries to change the assessment is one; an author's account of
+their work, notes for a human reader and a repository's own
+`AGENTS.md` or `CONTRIBUTING.md` are not. The agent acts on none of
+those and checks what they claim. A broader definition buries the
+real attempts among false reports: the review bot's agent, told to
+record anything that seemed to give instructions, reported 33 in
+215 sessions and none was one.
 
 A bot that renames the verdict tokens changes `AGENT_VERDICTS` in
 `apply.py` and the prompt together.
