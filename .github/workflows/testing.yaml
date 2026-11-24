@@ -30,6 +30,16 @@ on:
         description: 'Targets to hand to the agent in the manual dry-run'
         type: string
         default: '2'
+      reasoning_effort:
+        description: >-
+          Reasoning effort per session (none, minimal, low, medium,
+          high, xhigh or max; empty = the model's default)
+        type: string
+        default: ''
+      max_ai_credits:
+        description: 'AI credits per session at most (empty = no cap)'
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -86,6 +96,8 @@ jobs:
       dry_run: true
       repositories: "${{ inputs.repositories || '' }}"
       max_targets: "${{ inputs.max_targets || '2' }}"
+      reasoning_effort: "${{ inputs.reasoning_effort || '' }}"
+      max_ai_credits: "${{ inputs.max_ai_credits || '' }}"
       max_concurrent_agents: '2'
       harden_runner_egress: 'block'
       # yamllint disable-line rule:line-length

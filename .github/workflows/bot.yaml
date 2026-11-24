@@ -29,6 +29,19 @@ on:
         description: 'Copilot CLI model identifier'
         type: string
         default: 'claude-opus-5.5'
+      reasoning_effort:
+        description: >-
+          Copilot CLI reasoning effort for each session: none, minimal,
+          low, medium, high, xhigh or max; empty keeps the model's
+          default
+        type: string
+        default: ''
+      max_ai_credits:
+        description: >-
+          AI credits each session may spend, a positive integer; empty
+          sets no cap
+        type: string
+        default: ''
       repositories:
         description: 'Repositories to scan; commas and/or spaces'
         type: string
@@ -187,6 +200,8 @@ jobs:
           MAX_RUNTIME: "${{ inputs.max_runtime_minutes }}"
           MAX_AGENTS: "${{ inputs.max_concurrent_agents }}"
           MODEL: "${{ inputs.model }}"
+          REASONING_EFFORT: "${{ inputs.reasoning_effort }}"
+          MAX_AI_CREDITS: "${{ inputs.max_ai_credits }}"
         run: |
           [[ "$MAX_TARGETS" =~ ^[0-9]+$ ]] || {
             echo '::error::max_targets must be a non-negative integer'
@@ -197,6 +212,15 @@ jobs:
             echo '::error::max_concurrent_agents must be 1-30'; exit 1; }
           [[ "$MODEL" =~ ^[a-z0-9.-]+$ ]] || {
             echo '::error::model must be a lower-case identifier'; exit 1; }
+          # The levels the CLI lists in --help; empty keeps the model's.
+          case "$REASONING_EFFORT" in
+            ''|none|minimal|low|medium|high|xhigh|max) ;;
+            *) echo '::error::reasoning_effort must be empty or a CLI level'
+               exit 1 ;;
+          esac
+          [[ "$MAX_AI_CREDITS" =~ ^([1-9][0-9]*)?$ ]] || {
+            echo '::error::max_ai_credits must be empty or a positive integer'
+            exit 1; }
           # Expressions cannot add, so the job budget (session plus
           # toolchain setup and upload) is computed here.
           {
@@ -438,6 +462,8 @@ jobs:
           GH_TOKEN: "${{ steps.app-token.outputs.token || github.token }}"
           ORG: "${{ inputs.org }}"
           MODEL: "${{ inputs.model }}"
+          REASONING_EFFORT: "${{ inputs.reasoning_effort }}"
+          MAX_AI_CREDITS: "${{ inputs.max_ai_credits }}"
           DRY_RUN: "${{ inputs.dry_run }}"
           REPOSITORIES: "${{ steps.repositories.outputs.csv }}"
           EXCLUDE_REPOS: "${{ steps.exclusions.outputs.csv }}"
@@ -448,6 +474,8 @@ jobs:
           python3 bot-assets/scripts/prepare.py \
             --org "$ORG" --output-dir artefacts \
             --model "$MODEL" \
+            --reasoning-effort "$REASONING_EFFORT" \
+            --max-ai-credits "$MAX_AI_CREDITS" \
             --ledger artefacts/ledger.json \
             --repositories "$REPOSITORIES" \
             --exclude-file bot-assets/config/excluded-repos.txt \
@@ -618,6 +646,8 @@ jobs:
           COPILOT_GITHUB_TOKEN: "${{ secrets.copilot_token }}"
           COPILOT_HOME: "${{ runner.temp }}/copilot"
           MODEL: "${{ inputs.model }}"
+          REASONING_EFFORT: "${{ inputs.reasoning_effort }}"
+          MAX_AI_CREDITS: "${{ inputs.max_ai_credits }}"
         run: |
           # The prefix rejects native/classic tokens, not extra PAT
           # grants. The caller must provision Copilot Requests only.
@@ -638,6 +668,14 @@ jobs:
           for cmd in cat jq grep head tail wc ls; do
             allow="$allow,shell($cmd),shell($cmd:*)"
           done
+          # The prepare job checked both; empty passes neither flag.
+          tuning=()
+          if [ -n "$REASONING_EFFORT" ]; then
+            tuning+=("--reasoning-effort=$REASONING_EFFORT")
+          fi
+          if [ -n "$MAX_AI_CREDITS" ]; then
+            tuning+=("--max-ai-credits=$MAX_AI_CREDITS")
+          fi
           copilot \
             --prompt="$prompt" \
             --model="$MODEL" \
@@ -649,7 +687,8 @@ jobs:
             --no-auto-update --no-color \
             --log-dir=artefacts/copilot-logs \
             --usage-output-file artefacts/usage.json \
-            --share=artefacts/session-summary.md
+            --share=artefacts/session-summary.md \
+            "${tuning[@]}"
 
       - name: 'Preserve session output'
         if: always() && steps.packet.outcome == 'success'

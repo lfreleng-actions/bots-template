@@ -171,6 +171,15 @@ An input touches three files and one test:
    `test_input_defaults`, and to `CronContracts.test_dispatch_form`
    when the form grows.
 
+`reasoning_effort` and `max_ai_credits` are a worked example of all
+four steps: declared with empty defaults, checked in `Check inputs`,
+carried by `env:` to `prepare.py` and to the agent step, offered by
+both dispatch forms, and pinned in `InputContracts`,
+`CronContracts`, `TestingContracts` and `SessionTuningScriptTests`,
+which runs the real steps under bash. An input that reaches a
+command line as an optional flag builds an array, as the agent step's
+`tuning` does, so an empty value passes no argument at all.
+
 The pre-flight gate re-runs those tests at run time, so a bot that
 forgets step 4 fails its next scheduled run rather than its pull
 request alone.

@@ -314,6 +314,17 @@ The invocation:
   last fenced `json` block is the verdict.
 - `--usage-output-file artefacts/usage.json` and
   `--log-dir=artefacts/copilot-logs`.
+- `--reasoning-effort=<level>` and `--max-ai-credits=<credits>`,
+  each when its input holds a value. Both inputs default to empty,
+  which passes neither flag and leaves the session at the model's
+  default effort with no credit cap. The prepare job refuses any
+  value but empty or a level the CLI lists, and empty or a positive
+  integer, before any token mint; the values reach the session
+  through `env:`, never an expression in `run:`. Which levels each
+  model accepts, what a credit costs and how a session ends at the
+  cap are for a bot's runs to show; a session that ends at the cap
+  without a verdict is one the apply job already records as having
+  none.
 - `COPILOT_HOME` under `$RUNNER_TEMP`, deleted afterwards along with
   the CLI's spilled tool-output files in the temp directory. That
   cleanup is hygiene on a single-use VM, not secure erasure, and it
@@ -574,6 +585,8 @@ through that repository's own review.
 | `org`                                  | string  | required                         | Target owner; live runs require an organisation App                    |
 | `dry_run`                              | boolean | `true`                           | Run the agent and the checks; write nothing                            |
 | `model`                                | string  | `claude-opus-5.5`                | Copilot CLI model identifier, lower-case                               |
+| `reasoning_effort`                     | string  | `''`                             | CLI reasoning effort per session; empty keeps the model's default      |
+| `max_ai_credits`                       | string  | `''`                             | AI credits per session at most, a positive integer; empty, no cap      |
 | `repositories`                         | string  | `''`                             | Repositories to scan; commas and/or spaces; empty scans the owner      |
 | `exclude_repos`                        | string  | `''`                             | Repositories to skip; commas and/or spaces; overrides the bundled list |
 | `max_targets`                          | string  | `'20'`                           | Targets to hand to the agent at most; `0` lifts the cap                |
@@ -600,9 +613,11 @@ through that repository's own review.
 
 <!-- markdownlint-enable MD013 -->
 
-The prepare job validates every numeric input against its range and
-the model against `^[a-z0-9.-]+$` before anything else runs. The
-`repositories` and `exclude_repos` lists go to
+The prepare job validates every numeric input against its range,
+the model against `^[a-z0-9.-]+$`, `reasoning_effort` against the
+CLI's levels and `max_ai_credits` as a positive integer, each
+allowed empty, before anything else runs. The `repositories` and
+`exclude_repos` lists go to
 [`list-splitter-action`](https://github.com/lfreleng-actions/list-splitter-action),
 which splits each on commas and whitespace, drops repeats without
 regard to case, and refuses anything but a bare repository name of
@@ -616,15 +631,17 @@ the tests (see [Customising](CUSTOMISING.md)).
 ### 10.2 Scheduled caller (`bot-cron.yaml`)
 
 Dispatch inputs `dry_run`, `model` (a display-name choice the
-`options` job maps to an identifier), `repositories` and
-`max_targets`. The `schedule:` block ships commented out, with a
-weekday 07:00 UTC example; a workflow needs one live trigger and the
-dispatch form is it until the bot earns a schedule. Scheduled runs
-stay dry-run until the rollout clears them; a manual dispatch takes
-the operator's choice. The caller passes `org` as
-`github.repository_owner`, so a fork's scheduled runs stay inside the
-fork, and pins `assets_repository` and `assets_ref` to its own
-commit. Disabling the workflow in the Actions UI is the kill switch.
+`options` job maps to an identifier), `reasoning_effort`,
+`max_ai_credits`, `repositories` and `max_targets`. A scheduled run
+forwards the two tuning inputs empty. The `schedule:` block ships
+commented out, with a weekday 07:00 UTC example; a workflow needs
+one live trigger and the dispatch form is it until the bot earns a
+schedule. Scheduled runs stay dry-run until the rollout clears them;
+a manual dispatch takes the operator's choice. The caller passes
+`org` as `github.repository_owner`, so a fork's scheduled runs stay
+inside the fork, and pins `assets_repository` and `assets_ref` to
+its own commit. Disabling the workflow in the Actions UI is the kill
+switch.
 
 ### 10.3 Testing caller (`testing.yaml`)
 
@@ -640,8 +657,10 @@ does, so a pull request also proves the trusted jobs' egress.
 
 The full agent session, dry-run with read access alone, runs from
 `workflow_dispatch` instead: a maintainer triggers it against a
-chosen ref with `repositories` and `max_targets`, and it holds the
-model credential alone. The same workflow runs the offline suite
+chosen ref with `repositories`, `max_targets`, `reasoning_effort` and
+`max_ai_credits`, and it holds the model credential alone. The
+secretless legs take neither tuning input. The same workflow runs
+the offline suite
 under `uv run --locked` and builds the documentation with
 `mkdocs build --strict`.
 
@@ -802,6 +821,8 @@ shared modules rely on.
   "org": "lfreleng-actions",
   "dry_run": true,
   "model": "claude-opus-5.5",
+  "reasoning_effort": null,
+  "max_ai_credits": null,
   "targets": [
     {
       "key": "repo-157",
@@ -821,7 +842,9 @@ name that scopes the write mint; `number` is the issue or pull
 request; `head_sha` is the commit the agent looked at. A bot adds
 whatever its packet and its offline check need to each target, and
 top-level fields such as skip counts; the agent's packet step
-projects one target out of this file by `key`.
+projects one target out of this file by `key`. `reasoning_effort`
+is the CLI level the run's sessions used, and `max_ai_credits` the
+cap as an integer; each is `null` when its input was empty.
 
 ### 15.2 `matrix.json` (prepare to workflow)
 

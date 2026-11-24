@@ -43,6 +43,16 @@ on:
           - 'Claude Sonnet 5.5'
           - 'GPT-6 Astra'
         default: 'Claude Opus 5.5'
+      reasoning_effort:
+        description: >-
+          Reasoning effort per session (none, minimal, low, medium,
+          high, xhigh or max; empty = the model's default)
+        type: string
+        default: ''
+      max_ai_credits:
+        description: 'AI credits per session at most (empty = no cap)'
+        type: string
+        default: ''
       repositories:
         description: 'Repositories to scan (commas and/or spaces)'
         type: string
@@ -113,6 +123,9 @@ jobs:
       dry_run: >-
         ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
       model: "${{ needs.options.outputs.model }}"
+      # Empty, as on a scheduled run, passes neither flag.
+      reasoning_effort: "${{ inputs.reasoning_effort || '' }}"
+      max_ai_credits: "${{ inputs.max_ai_credits || '' }}"
       repositories: "${{ inputs.repositories || '' }}"
       max_targets: "${{ inputs.max_targets || '20' }}"
       harden_runner_egress: 'block'

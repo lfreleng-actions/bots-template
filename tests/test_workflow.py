@@ -687,6 +687,8 @@ class InputContracts(ReusableWorkflowCase):
                 "org",
                 "dry_run",
                 "model",
+                "reasoning_effort",
+                "max_ai_credits",
                 "repositories",
                 "exclude_repos",
                 "max_targets",
@@ -723,7 +725,6 @@ class InputContracts(ReusableWorkflowCase):
         self.assertEqual(inputs["max_targets"]["default"], "20")
         self.assertEqual(inputs["assets_ref"]["default"], "")
 
-    @unittest.expectedFailure
     def test_session_tuning_inputs_default_to_nothing(self) -> None:
         """Both are strings, and empty passes neither flag."""
         inputs = self.triggers["workflow_call"]["inputs"]
@@ -732,7 +733,6 @@ class InputContracts(ReusableWorkflowCase):
                 self.assertEqual(inputs[name]["type"], "string")
                 self.assertEqual(inputs[name]["default"], "")
 
-    @unittest.expectedFailure
     def test_session_tuning_travels_by_env_alone(self) -> None:
         """Check inputs, the selection and the session read env, not expressions."""
         for job, identity in (
@@ -770,7 +770,15 @@ class CronContracts(WorkflowCase):
         """The form offers the operator the template's tunables."""
         inputs = self.triggers["workflow_dispatch"]["inputs"]
         self.assertEqual(
-            set(inputs), {"dry_run", "model", "repositories", "max_targets"}
+            set(inputs),
+            {
+                "dry_run",
+                "model",
+                "reasoning_effort",
+                "max_ai_credits",
+                "repositories",
+                "max_targets",
+            },
         )
         self.assertTrue(inputs["dry_run"]["default"])
         self.assertEqual(inputs["model"]["default"], "Claude Opus 5.5")
@@ -785,7 +793,6 @@ class CronContracts(WorkflowCase):
             self.jobs["bot"]["with"]["model"], "${{ needs.options.outputs.model }}"
         )
 
-    @unittest.expectedFailure
     def test_dispatch_forwards_session_tuning(self) -> None:
         """The form offers both, empty by default, and forwards them as typed."""
         inputs = self.triggers["workflow_dispatch"]["inputs"]
@@ -870,7 +877,6 @@ class TestingContracts(WorkflowCase):
         )
         self.assertEqual(dry["with"]["max_targets"], "${{ inputs.max_targets || '2' }}")
 
-    @unittest.expectedFailure
     def test_manual_dry_run_forwards_session_tuning(self) -> None:
         """The manual dry run takes both; the secretless legs take neither."""
         inputs = self.triggers["workflow_dispatch"]["inputs"]
@@ -1179,7 +1185,6 @@ class SessionTuningScriptTests(ReusableWorkflowCase):
         }
         return self.run_step("prepare", "budget", env).returncode
 
-    @unittest.expectedFailure
     def test_check_inputs_refuses_anything_but_a_level_or_a_count(self) -> None:
         """Empty or a CLI level; empty or a positive integer. Nothing else."""
         for effort in ("", *CLI_EFFORT_LEVELS):
@@ -1231,14 +1236,12 @@ class SessionTuningScriptTests(ReusableWorkflowCase):
         )
         self.assertNotIn("", args)
 
-    @unittest.expectedFailure
     def test_each_set_input_passes_its_flag(self) -> None:
         """A level and a cap reach the CLI as one argument each."""
         args = self.run_agent("high", "40")
         self.assertIn("--reasoning-effort=high", args)
         self.assertIn("--max-ai-credits=40", args)
 
-    @unittest.expectedFailure
     def test_one_input_alone_passes_its_flag_alone(self) -> None:
         """Setting the cap without a level adds the cap and nothing else."""
         args = self.run_agent("", "40")

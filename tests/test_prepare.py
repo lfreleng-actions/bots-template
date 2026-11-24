@@ -118,7 +118,6 @@ class MainTest(unittest.TestCase):
         self.assertEqual(json.loads((out / "matrix.json").read_text()), {"include": []})
         self.assertIn("0 target(s)", (out / "selection-summary.md").read_text())
 
-    @unittest.expectedFailure
     def test_selection_records_session_tuning(self) -> None:
         """A level and a cap are recorded as given; empty records null."""
         out = self.root / "out"
@@ -133,7 +132,6 @@ class MainTest(unittest.TestCase):
             self.assertEqual(selection["reasoning_effort"], effort)
             self.assertEqual(selection["max_ai_credits"], credits)
 
-    @unittest.expectedFailure
     def test_bad_session_tuning_is_refused(self) -> None:
         """The selection re-checks what the workflow's Check inputs checked."""
         with redirect_stdout(io.StringIO()):

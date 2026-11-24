@@ -25,11 +25,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 SCHEMA = 1
 TARGET_KEYS = ("key", "repository", "repo_name", "number", "head_sha")
+# The Copilot CLI's --reasoning-effort levels; empty keeps the model's.
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+CREDITS_RE = re.compile(r"^[1-9][0-9]*$")
 
 
 def load_exclusions(path: Path, extra: str) -> set[str]:
@@ -64,6 +68,21 @@ def select_targets(
     return []
 
 
+def session_tuning(effort: str, credits: str) -> tuple[str | None, int | None]:
+    """The reasoning effort and credit cap a run records; None where empty.
+
+    The workflow's Check inputs step refuses anything else first; this
+    check keeps a hand-run selection to the same rule.
+    """
+    if effort and effort not in REASONING_EFFORTS:
+        raise ValueError(
+            f"--reasoning-effort must be empty or one of {', '.join(REASONING_EFFORTS)}"
+        )
+    if credits and not CREDITS_RE.fullmatch(credits):
+        raise ValueError("--max-ai-credits must be empty or a positive integer")
+    return effort or None, int(credits) if credits else None
+
+
 def matrix_for(targets: list[dict[str, Any]]) -> dict[str, Any]:
     """The matrix the agent and apply jobs fan out over."""
     return {"include": [{k: t[k] for k in TARGET_KEYS} for t in targets]}
@@ -85,6 +104,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--org", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--reasoning-effort", default="")
+    parser.add_argument("--max-ai-credits", default="")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--repositories", default="")
@@ -96,6 +117,10 @@ def main(argv: list[str] | None = None) -> None:
         parser.exit(1, "prepare: --max-targets must be non-negative\n")
     if not args.ledger.is_file():
         parser.exit(1, f"prepare: ledger {args.ledger} is missing\n")
+    try:
+        effort, credits = session_tuning(args.reasoning_effort, args.max_ai_credits)
+    except ValueError as exc:
+        parser.exit(1, f"prepare: {exc}\n")
     repositories = [r for r in args.repositories.replace(",", " ").split() if r]
     excluded = load_exclusions(args.exclude_file, args.exclude_repos)
     targets = select_targets(args.org, repositories, excluded, args.max_targets)
@@ -104,6 +129,8 @@ def main(argv: list[str] | None = None) -> None:
         "org": args.org,
         "dry_run": args.dry_run,
         "model": args.model,
+        "reasoning_effort": effort,
+        "max_ai_credits": credits,
         "targets": targets,
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
