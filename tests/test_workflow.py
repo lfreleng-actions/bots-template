@@ -278,7 +278,6 @@ class PrepareContracts(ReusableWorkflowCase):
         self.assertEqual(env["COPILOT_GITHUB_TOKEN"], "${{ secrets.copilot_token }}")
         self.assertEqual(env["ASSETS_SHA"], "${{ steps.pinned.outputs.sha }}")
 
-    @unittest.expectedFailure
     def test_app_permissions_gate_runs_before_the_read_mint(self) -> None:
         """The App's own grants are checked after the config and before a mint."""
         order = [
@@ -297,7 +296,6 @@ class PrepareContracts(ReusableWorkflowCase):
         )
         self.assertNotIn("${{", run)
 
-    @unittest.expectedFailure
     def test_app_permissions_gate_holds_the_key_in_its_env_alone(self) -> None:
         """The key reaches the gate through env, and only the expected steps."""
         gate = self.step("prepare", APP_PERMISSIONS)

@@ -377,6 +377,19 @@ jobs:
             --workflow-sha "$JOB_WORKFLOW_SHA" \
             --assets-sha "$ASSETS_SHA" "${extra[@]}"
 
+      # An App holds its permissions on every installation at once, so
+      # a grant the bot no longer needs is refused here, before any
+      # token exists. The step reads the App's own record with a
+      # one-minute JWT and prints neither the key nor the JWT.
+      - name: 'Pre-flight: App permissions'
+        if: inputs.github_app_client_id != ''
+        env:
+          BOT_APP_CLIENT_ID: "${{ inputs.github_app_client_id }}"
+          BOT_APP_PRIVATE_KEY: "${{ secrets.github_app_private_key }}"
+        run: |
+          python3 bot-assets/scripts/preflight.py app-permissions \
+            --config bot-assets/config/bot.json
+
       # Read-only. A bot that needs more reads adds permission-*: read
       # grants here; nothing in this job may hold a write.
       - name: 'Mint read-only App token'

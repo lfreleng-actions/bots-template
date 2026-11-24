@@ -70,7 +70,6 @@ class ConfigTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(preflight.Drift):
                 preflight.check_config(path)
 
-    @unittest.expectedFailure
     def test_forbidden_permissions_are_read_from_the_config(self) -> None:
         """A list of permission names comes back; absent means none."""
         names = ["administration", "organization_administration"]
@@ -82,7 +81,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(preflight.forbidden_permissions(listed), names)
         self.assertEqual(preflight.forbidden_permissions(bare), [])
 
-    @unittest.expectedFailure
     def test_malformed_forbidden_permissions_are_drift(self) -> None:
         """Only a list of lower-case words joined by underscores passes."""
         with redirect_stdout(io.StringIO()):
@@ -105,7 +103,6 @@ class ConfigTest(unittest.TestCase):
                     write_config(self.root, forbidden_permissions=value)
                 )
 
-    @unittest.expectedFailure
     def test_template_config_forbids_administration(self) -> None:
         """The template ships with the grant no bot of this shape needs."""
         with redirect_stdout(io.StringIO()):
@@ -255,7 +252,6 @@ class IdentityAndTokenTest(unittest.TestCase):
 class AppPermissionsTest(unittest.TestCase):
     """The App's own record must grant no forbidden permission at any level."""
 
-    @unittest.expectedFailure
     def test_forbidden_grant_at_any_level_is_drift(self) -> None:
         """Read and write both fail, naming the permission."""
         for level in ("read", "write"):
@@ -269,7 +265,6 @@ class AppPermissionsTest(unittest.TestCase):
                 )
             self.assertIn("administration", str(caught.exception))
 
-    @unittest.expectedFailure
     def test_absent_grant_passes(self) -> None:
         """Other permissions, at any level, are not this check's business."""
         out = io.StringIO()
@@ -375,7 +370,6 @@ class CliTest(unittest.TestCase):
                     code = exc.code
         return code, out.getvalue(), calls
 
-    @unittest.expectedFailure
     def test_app_permissions_command_refuses_a_forbidden_grant(self) -> None:
         """Exit one naming the grant; the key is read, never printed."""
         env = {"BOT_APP_CLIENT_ID": CLIENT_ID, "BOT_APP_PRIVATE_KEY": PEM}
@@ -389,7 +383,6 @@ class CliTest(unittest.TestCase):
         for secret in (PEM, "MIIEpAIBAAKCAQEA", CLIENT_ID):
             self.assertNotIn(secret, output)
 
-    @unittest.expectedFailure
     def test_app_permissions_command_passes_a_clean_app(self) -> None:
         """An App without the grant passes and says what it checked."""
         env = {"BOT_APP_CLIENT_ID": CLIENT_ID, "BOT_APP_PRIVATE_KEY": PEM}
@@ -400,7 +393,6 @@ class CliTest(unittest.TestCase):
         self.assertIn("preflight: ok", output)
         self.assertEqual(len(calls), 1)
 
-    @unittest.expectedFailure
     def test_app_permissions_command_fails_closed_on_a_failed_read(self) -> None:
         """A record that cannot be read fails the run, naming no secret."""
         env = {"BOT_APP_CLIENT_ID": CLIENT_ID, "BOT_APP_PRIVATE_KEY": PEM}
@@ -414,7 +406,6 @@ class CliTest(unittest.TestCase):
         self.assertIn("HTTP 401", output)
         self.assertNotIn("MIIEpAIBAAKCAQEA", output)
 
-    @unittest.expectedFailure
     def test_app_permissions_command_needs_both_credentials(self) -> None:
         """Without a client id and a key there is no record to read."""
         for env in (
@@ -429,7 +420,6 @@ class CliTest(unittest.TestCase):
                 self.assertIn("::error::preflight:", output)
                 self.assertEqual(calls, [])
 
-    @unittest.expectedFailure
     def test_app_permissions_command_with_nothing_forbidden_reads_nothing(
         self,
     ) -> None:

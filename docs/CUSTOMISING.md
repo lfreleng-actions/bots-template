@@ -24,7 +24,7 @@ first; every rule below follows from them.
 | `.github/workflows/release*.yaml`                          | **Keep**    | Release drafter and tag release                                                                                                                       |
 | `.github/workflows/openssf-scorecard.yaml`                 | **Keep**    | Scorecard badge                                                                                                                                       |
 | `prompt/task.md`                                           | **Replace** | Fill every `replace` marker; keep the trust framing, the tool list and the verdict block                                                              |
-| `config/bot.json`                                          | **Replace** | The bot's App slug; `description` is optional and the gate refuses any other key                                                                      |
+| `config/bot.json`                                          | **Replace** | The App slug, and the App permissions the gate refuses in `forbidden_permissions`; `description` is optional and the gate refuses any other key       |
 | `config/excluded-repos.txt`                                | **Adapt**   | The repositories the scan skips                                                                                                                       |
 | `tools/copilot-cli/`                                       | **Keep**    | Bump the CLI by regenerating the lockfile in a reviewed pull request                                                                                  |
 | `scripts/prepare.py`                                       | **Replace** | `select_targets`; keep the arguments, the three output files and the five target keys                                                                 |
@@ -35,6 +35,7 @@ first; every rule below follows from them.
 | `scripts/artifact_fetch.py`                                | **Keep**    | Shared, verbatim                                                                                                                                      |
 | `scripts/preflight.py`                                     | **Keep**    | Shared, verbatim; a further check is a new command (below)                                                                                            |
 | `scripts/ledger.py`                                        | **Keep**    | Shared, verbatim; `RECORDED_VERDICTS` is the one constant a bot edits                                                                                 |
+| `scripts/bot_app.py`                                       | **Keep**    | Shared, verbatim; `preflight.py app-permissions` reads the App's own grants through it                                                                |
 | `tests/test_workflow.py`                                   | **Adapt**   | Update the facts that change with the bot (artifact prefix, write permission, inputs) and nothing else; see below                                     |
 | `tests/test_prepare.py`, `test_apply.py`, `test_report.py` | **Replace** | Tests for the bot's own selection, corroboration and report                                                                                           |
 | other `tests/test_*.py`                                    | **Keep**    | Cover the shared modules                                                                                                                              |
@@ -202,7 +203,7 @@ never acceptable.
 
 Every bot carries `preflight.py` verbatim, and it knows the shape
 every bot has in common. A bot that needs a further run-time check
-adds a command rather than editing the four that exist, so the
+adds a command rather than editing the ones that exist, so the
 shared file stays verbatim and the bot's addition is visible as
 such:
 
@@ -215,6 +216,14 @@ such:
 
 Propose a check with no bot-specific content to the template; the
 other bots then inherit it.
+
+A permission the bot's App must never hold needs no new command:
+list it in `forbidden_permissions` in `config/bot.json`, using the
+name GitHub gives it in the App's record (`administration`,
+`organization_administration` and so on). The `app-permissions`
+command then fails every run while the App holds it, at any level.
+Keep `administration` in the list unless the bot's one write
+genuinely needs it.
 
 ## Adding a configuration file
 

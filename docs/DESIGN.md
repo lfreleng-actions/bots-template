@@ -184,6 +184,7 @@ before any `create-github-app-token` step, and fails the run closed.
 | Before the read mint | `zizmor --persona auditor` on the checked-out workflows: zero findings                           | Expression injection, `pull_request_target`, cache poisoning, anything the contract tests do not name                                                                                                         |
 | Before the read mint | `config/bot.json` is a small object naming one lower-case slug                                   | A config edit that points identity checks at a different App                                                                                                                                                  |
 | Before the read mint | Credential shapes: client id pattern, PEM markers and plausible key length, `github_pat_` prefix | The wrong secret under the right name; values are never printed                                                                                                                                               |
+| Before the read mint | `GET /app` with a one-minute JWT: the App holds no `forbidden_permissions` entry, at any level   | A permission the bot no longer needs, left on an App that holds it on every installation at once                                                                                                              |
 | Before the read mint | Block mode has a commit-pinned allow-list coordinate and a loaded list                           | An allow-list absent without an error, or pinned to a moving branch                                                                                                                                           |
 | Before the read mint | A live run's `assets_sha` equals `job.workflow_sha`                                              | A reviewed workflow executing unreviewed scripts through `assets_ref`                                                                                                                                         |
 | After the read mint  | The `app-slug` the mint returns equals `config/bot.json`                                         | Another App's private key wired into this workflow                                                                                                                                                            |
@@ -197,17 +198,19 @@ uv-managed Python from `releases.astral.sh` (pinned and hash-checked
 by uv) that every later uv call takes by absolute path, so nothing in
 the job's environment can choose the interpreter, and a `zizmor`
 install from PyPI; the allow-list already carries both hosts.
-Everything it checks is a file already on the runner or a value the
-workflow already holds; it introduces nothing new to trust. A run it
-fails is a run that must not proceed, and the error annotation names
-the check without quoting what the check read.
+Everything it checks is a file already on the runner, a value the
+workflow already holds, or the App's own record, which it reads from
+`api.github.com` with a JWT that lapses after a minute; it
+introduces nothing new to trust. A run it fails is a run that must
+not proceed, and the error annotation names the check without
+quoting what the check read.
 
 The gate is not where policy lives. It verifies that the workflow
 still has the shape the design and tests describe; the design and
 tests remain the place to change that shape. `preflight.py` knows
 the shape every bot shares and nothing of what any one bot does; a
 bot that needs a further check adds a command rather than editing
-the four that exist (see [Customising](CUSTOMISING.md)).
+the ones that exist (see [Customising](CUSTOMISING.md)).
 
 ## 5. Credentials
 
@@ -226,6 +229,15 @@ The slug lives in `config/bot.json`, a small object with `app_slug`
 and an optional `description`; the pre-flight gate refuses a token
 minted by any other App, twice per target: after the read mint and
 before the write.
+
+The same file may carry `forbidden_permissions`, a list of GitHub
+App permission names the App must not hold at any level; absent
+means none. An App holds its permissions on every installation at
+once, so a grant a bot stops needing still reaches every repository
+the App can see until someone removes it in the App's settings.
+The gate reads the App's own record before the read mint and fails
+the run while it holds one. The template forbids `administration`:
+no bot of this shape creates, renames or configures repositories.
 
 The calling workflow names the credentials by role, never by App or
 repository: `vars.BOT_APP_CLIENT_ID` and `secrets.BOT_APP_PRIVATE_KEY`.
@@ -327,7 +339,7 @@ resurrecting the removed code.
 
 ## 7. Shared modules
 
-Five modules are the template's contribution to every bot. Each bot
+Six modules are the template's contribution to every bot. Each bot
 carries them verbatim; a defect or an improvement lands here first
 and propagates. A bot never patches its own copy alone.
 
@@ -452,13 +464,19 @@ a job failure.
 
 ### 7.4 `preflight.py`
 
-The run-time checks of section 4, as four commands: `workflow`
+The run-time checks of section 4, as five commands: `workflow`
 (contract tests and zizmor from the pinned checkout), `config`
 (`config/bot.json`, credential shapes, egress coordinate, live
-assets skew), `identity` (the minted slug) and `token` (a read token
-cannot push). Each prints one line per check and nothing else; no
-value a check read is ever echoed. The workflow calls them under the
-template's credential names, which the contract tests pin.
+assets skew), `app-permissions` (the App's own grants against
+`forbidden_permissions`), `identity` (the minted slug) and `token`
+(a read token cannot push). Each prints one line per check and
+nothing else; no value a check read is ever echoed. The workflow
+calls them under the template's credential names, which the
+contract tests pin.
+
+`app-permissions` reads the App's own grants through `bot_app.py`
+(§7.6). A failed read, or a reply without `permissions`, fails the
+run. A configuration that forbids nothing makes no request.
 
 ### 7.5 `ledger.py`
 
@@ -469,6 +487,21 @@ profile, and writes an empty ledger when no run has published.
 `load_ledger`, `merge`, `already_assessed` and `record` are the
 functions a bot's `prepare.py` and `report.py` call. `RECORDED_VERDICTS`
 is the one constant a bot edits.
+
+### 7.6 `bot_app.py`
+
+Authentication as the App itself rather than as one installation,
+which the App's own record (`GET /app`) requires. `app_permissions`
+takes the client id and the private key and returns the permissions
+the App holds on every installation. It signs a JWT with RS256
+through `openssl`, feeding the key on standard input so the key never
+reaches a file or a command line. The module backdates the JWT by
+60 seconds for clock drift, and the JWT lapses a minute after the
+module makes it. The request goes through the standard library
+rather than `gh`, which would need the JWT as a command-line
+argument to send it under the `Bearer` scheme. Every failure raises
+`AppError`, whose message names neither the key, the JWT nor
+anything `openssl` printed.
 
 ## 8. The ledger
 
@@ -725,7 +758,7 @@ no credential; the `prek` hook runs it on every commit.
                                          regression, docs build
 .github/workflows/documentation.yaml     mkdocs to GitHub Pages
 prompt/task.md                           agent task, with replace markers
-config/bot.json                          the App slug the gate checks
+config/bot.json                          App slug and forbidden grants (§5.1)
 config/excluded-repos.txt                repositories the scan skips
 tools/copilot-cli/                       pinned CLI lockfile
 scripts/bot_github.py                    shared: gh wrapper (§7.1)
@@ -733,6 +766,7 @@ scripts/bot_evidence.py                  shared: digests, caps (§7.2)
 scripts/artifact_fetch.py                shared: bounded fetch (§7.3)
 scripts/preflight.py                     shared: run-time gate (§7.4)
 scripts/ledger.py                        shared: run-to-run memory (§7.5)
+scripts/bot_app.py                       shared: App authentication (§7.6)
 scripts/prepare.py                       placeholder: selection
 scripts/apply.py                         placeholder: check and write
 scripts/report.py                        placeholder: report and ledger

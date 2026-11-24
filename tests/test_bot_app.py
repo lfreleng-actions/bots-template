@@ -17,21 +17,16 @@ import urllib.request
 from email.message import Message
 from importlib import import_module
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+bot_app = import_module("bot_app")
 github = import_module("bot_github")
 
 CLIENT_ID = "Iv23liB4s8f6cI7i0oQB"
 # Never a real key: the signing is stubbed wherever this is passed.
 KEY = "not-a-key-" + "x" * 64
-
-
-def bot_app() -> ModuleType:
-    """The module under test, imported when a test first needs it."""
-    return import_module("bot_app")
 
 
 def unpad(part: str) -> bytes:
@@ -84,18 +79,16 @@ class FakeGitHub:
 class JwtTest(unittest.TestCase):
     """``app_jwt`` issues an RS256 token the App can authenticate with."""
 
-    @unittest.expectedFailure
     def test_claims(self) -> None:
         """RS256, backdated a minute, valid a minute, issued by the client id."""
-        module = bot_app()
         signed: list[tuple[bytes, str]] = []
 
         def fake_sign(data: bytes, key: str) -> bytes:
             signed.append((data, key))
             return b"\x00signature"
 
-        with patch.object(module, "sign_rs256", side_effect=fake_sign):
-            token = module.app_jwt(CLIENT_ID, KEY, now=1_000_000)
+        with patch.object(bot_app, "sign_rs256", side_effect=fake_sign):
+            token = bot_app.app_jwt(CLIENT_ID, KEY, now=1_000_000)
         header, payload, signature = token.split(".")
         self.assertEqual(json.loads(unpad(header)), {"alg": "RS256", "typ": "JWT"})
         self.assertEqual(
@@ -106,11 +99,9 @@ class JwtTest(unittest.TestCase):
         self.assertEqual(signed, [(f"{header}.{payload}".encode(), KEY)])
         self.assertNotIn("=", token)
 
-    @unittest.expectedFailure
     @unittest.skipUnless(shutil.which("openssl"), "openssl is not installed")
     def test_signature_verifies_with_the_public_key(self) -> None:
         """openssl signs with the key on stdin, and the signature checks out."""
-        module = bot_app()
 
         def openssl(*args: str, stdin: str | None = None) -> str:
             return subprocess.run(
@@ -129,7 +120,7 @@ class JwtTest(unittest.TestCase):
                 openssl("pkey", "-pubout", stdin=key), encoding="utf-8"
             )
             (root / "data").write_bytes(b"header.payload")
-            (root / "signature").write_bytes(module.sign_rs256(b"header.payload", key))
+            (root / "signature").write_bytes(bot_app.sign_rs256(b"header.payload", key))
             verified = subprocess.run(
                 [
                     "openssl",
@@ -147,39 +138,33 @@ class JwtTest(unittest.TestCase):
             )
         self.assertEqual(verified.returncode, 0)
 
-    @unittest.expectedFailure
     def test_signing_failure_names_no_key(self) -> None:
         """A key openssl cannot use fails, and what openssl said is dropped."""
-        module = bot_app()
         failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=KEY.encode())
         with (
-            patch.object(module.subprocess, "run", return_value=failed),
-            self.assertRaises(module.AppError) as caught,
+            patch.object(bot_app.subprocess, "run", return_value=failed),
+            self.assertRaises(bot_app.AppError) as caught,
         ):
-            module.sign_rs256(b"data", KEY)
+            bot_app.sign_rs256(b"data", KEY)
         self.assertNotIn(KEY, str(caught.exception))
 
-    @unittest.expectedFailure
     def test_missing_openssl_fails(self) -> None:
         """No openssl on the runner is a failure, not a silent skip."""
-        module = bot_app()
         with (
-            patch.object(module.shutil, "which", return_value=None),
-            self.assertRaises(module.AppError),
+            patch.object(bot_app.shutil, "which", return_value=None),
+            self.assertRaises(bot_app.AppError),
         ):
-            module.sign_rs256(b"data", KEY)
+            bot_app.sign_rs256(b"data", KEY)
 
 
 class RecordTest(unittest.TestCase):
     """``read_permissions`` reads ``GET /app`` with the JWT and fails closed."""
 
-    @unittest.expectedFailure
     def test_record_is_read_with_the_jwt_as_bearer(self) -> None:
         """GET /app on the REST API, at the pinned version, with the JWT."""
-        module = bot_app()
         fake = FakeGitHub({"slug": "x", "permissions": {"contents": "write"}})
-        with patch.object(module.urllib.request, "urlopen", side_effect=fake):
-            grants = module.read_permissions("a.b.c")
+        with patch.object(bot_app.urllib.request, "urlopen", side_effect=fake):
+            grants = bot_app.read_permissions("a.b.c")
         self.assertEqual(grants, {"contents": "write"})
         (request,) = fake.requests
         self.assertEqual(request.full_url, "https://api.github.com/app")
@@ -187,10 +172,8 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(request.get_header("Authorization"), "Bearer a.b.c")
         self.assertEqual(request.get_header("X-github-api-version"), github.API_VERSION)
 
-    @unittest.expectedFailure
     def test_failed_or_unreadable_reply_fails_closed(self) -> None:
         """No reply, a refusal, or a reply without permissions is an error."""
-        module = bot_app()
         refused = urllib.error.HTTPError(
             "https://api.github.com/app", 401, "Unauthorized", Message(), None
         )
@@ -199,29 +182,27 @@ class RecordTest(unittest.TestCase):
             ("refused", FakeGitHub(error=refused)),
             ("timed out", FakeGitHub(error=TimeoutError())),
             ("not json", FakeGitHub(b"<html>")),
-            ("too large", FakeGitHub(b" " * (module.MAX_REPLY_BYTES + 1))),
+            ("too large", FakeGitHub(b" " * (bot_app.MAX_REPLY_BYTES + 1))),
             ("not an object", FakeGitHub([])),
             ("no permissions", FakeGitHub({"slug": "x"})),
             ("permissions not an object", FakeGitHub({"permissions": []})),
         ):
             with (
                 self.subTest(name=name),
-                patch.object(module.urllib.request, "urlopen", side_effect=fake),
-                self.assertRaises(module.AppError) as caught,
+                patch.object(bot_app.urllib.request, "urlopen", side_effect=fake),
+                self.assertRaises(bot_app.AppError) as caught,
             ):
-                module.read_permissions("a.b.c")
+                bot_app.read_permissions("a.b.c")
             self.assertNotIn("a.b.c", str(caught.exception))
 
-    @unittest.expectedFailure
     def test_app_permissions_signs_then_reads(self) -> None:
         """The one entry point a caller needs: credentials in, grants out."""
-        module = bot_app()
         fake = FakeGitHub({"permissions": {"issues": "write"}})
         with (
-            patch.object(module, "sign_rs256", return_value=b"sig"),
-            patch.object(module.urllib.request, "urlopen", side_effect=fake),
+            patch.object(bot_app, "sign_rs256", return_value=b"sig"),
+            patch.object(bot_app.urllib.request, "urlopen", side_effect=fake),
         ):
-            grants = module.app_permissions(CLIENT_ID, KEY)
+            grants = bot_app.app_permissions(CLIENT_ID, KEY)
         self.assertEqual(grants, {"issues": "write"})
         (request,) = fake.requests
         token = str(request.get_header("Authorization")).removeprefix("Bearer ")
