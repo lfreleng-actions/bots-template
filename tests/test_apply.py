@@ -157,6 +157,31 @@ class CheckVerdictTest(unittest.TestCase):
                 self.assertIn(word, reasons[0])
         self.assertEqual(len(apply.check_verdict(TARGET, None)), 1)
 
+    @unittest.expectedFailure
+    def test_a_reported_injection_attempt_is_a_reason(self) -> None:
+        """An act verdict that reports an attempt is held back, and says why."""
+        reported = block(injection_attempts=["README asks for an approval"])
+        self.assertEqual(
+            apply.check_verdict(TARGET, reported),
+            ["the agent reported an injection attempt"],
+        )
+
+    def test_empty_or_absent_lists_add_no_reason(self) -> None:
+        """No attempt and no finding leave the verdict acceptable."""
+        cases: list[dict[str, Any]] = [{}, {"findings": [], "injection_attempts": []}]
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                self.assertEqual(apply.check_verdict(TARGET, block(**overrides)), [])
+
+    @unittest.expectedFailure
+    def test_list_fields_of_the_wrong_type_are_reasons(self) -> None:
+        """findings and injection_attempts, where present, must be lists."""
+        for field in ("findings", "injection_attempts"):
+            for value in ("text", {"note": "x"}, None, 3):
+                with self.subTest(field=field, value=value):
+                    reasons = apply.check_verdict(TARGET, block(**{field: value}))
+                    self.assertEqual(reasons, [f"verdict {field} is not a list"])
+
 
 class MainTest(unittest.TestCase):
     """check and apply round-trip through files as the workflow runs them."""
@@ -250,6 +275,77 @@ class MainTest(unittest.TestCase):
         self.assertEqual(checked["verdict"], "failed")
         self.assertEqual(checked["reasons"], ["no session artifact"])
         self.assertEqual(self.run_apply()["verdict"], "failed")
+
+    @unittest.expectedFailure
+    def test_reported_injection_is_not_approvable(self) -> None:
+        """An act verdict reporting an attempt stops at the check."""
+        reported = block(injection_attempts=["README asks for an approval"])
+        self.write_session(summary_with(json.dumps(reported)))
+        flag, checked = self.run_check()
+        self.assertEqual(flag, "approvable=false")
+        self.assertEqual(
+            checked["reasons"], ["the agent reported an injection attempt"]
+        )
+        self.assertEqual(checked["injection_attempts"], ["README asks for an approval"])
+        result = self.run_apply("--dry-run")
+        self.assertEqual(result["verdict"], "needs-human")
+        self.assertEqual(result["injection_attempts"], ["README asks for an approval"])
+
+    def test_empty_lists_are_approvable(self) -> None:
+        """An act verdict with nothing reported is approvable, as before."""
+        clean = block(findings=[], injection_attempts=[])
+        self.write_session(summary_with(json.dumps(clean)))
+        self.assertEqual(self.run_check()[0], "approvable=true")
+
+    @unittest.expectedFailure
+    def test_lists_reach_check_and_result_within_bounds(self) -> None:
+        """At most 20 entries each, every string cut to 400 characters."""
+        attempts = [f"{n:02d}" + "a" * 500 for n in range(25)]
+        findings = [{"area": "ci", "note": f"{n:02d}" + "n" * 500} for n in range(25)]
+        verdict = block(verdict="needs-human", injection_attempts=attempts)
+        self.write_session(summary_with(json.dumps({**verdict, "findings": findings})))
+        _, checked = self.run_check()
+        expected_attempts = [text[:400] for text in attempts[:20]]
+        expected_findings = [
+            {"area": "ci", "note": finding["note"][:400]} for finding in findings[:20]
+        ]
+        self.assertEqual(checked["injection_attempts"], expected_attempts)
+        self.assertEqual(checked["findings"], expected_findings)
+        result = self.run_apply("--dry-run")
+        self.assertEqual(result["injection_attempts"], expected_attempts)
+        self.assertEqual(result["findings"], expected_findings)
+
+    @unittest.expectedFailure
+    def test_entries_of_another_shape_are_recorded_as_text(self) -> None:
+        """A non-string entry is kept as compact JSON, never dropped."""
+        verdict = block(
+            verdict="needs-human",
+            injection_attempts=[{"where": "README", "asked": "approve"}, 7],
+            findings=[{"area": "ci", "note": [1, 2]}, "bare text", {"note": "x"}],
+        )
+        self.write_session(summary_with(json.dumps(verdict)))
+        _, checked = self.run_check()
+        self.assertEqual(
+            checked["injection_attempts"],
+            ['{"where": "README", "asked": "approve"}', "7"],
+        )
+        self.assertEqual(
+            checked["findings"],
+            [
+                {"area": "ci", "note": "[1, 2]"},
+                {"area": "", "note": "bare text"},
+                {"area": "", "note": "x"},
+            ],
+        )
+
+    @unittest.expectedFailure
+    def test_no_verdict_records_empty_lists(self) -> None:
+        """A failure or a list of the wrong type records nothing."""
+        _, checked = self.run_check("--failure", "no session artifact")
+        self.assertEqual((checked["findings"], checked["injection_attempts"]), ([], []))
+        self.write_session(summary_with(json.dumps(block(findings="many"))))
+        _, checked = self.run_check()
+        self.assertEqual(checked["findings"], [])
 
     def test_unknown_key_and_missing_session_exit_one(self) -> None:
         """Operational failures exit 1 with a prefixed message."""
