@@ -118,6 +118,39 @@ class MainTest(unittest.TestCase):
         self.assertEqual(json.loads((out / "matrix.json").read_text()), {"include": []})
         self.assertIn("0 target(s)", (out / "selection-summary.md").read_text())
 
+    @unittest.expectedFailure
+    def test_selection_records_session_tuning(self) -> None:
+        """A level and a cap are recorded as given; empty records null."""
+        out = self.root / "out"
+        for extra, effort, credits in (
+            (("--reasoning-effort", "high", "--max-ai-credits", "40"), "high", 40),
+            (("--reasoning-effort", "", "--max-ai-credits", ""), None, None),
+            ((), None, None),
+        ):
+            with self.subTest(extra=extra), redirect_stdout(io.StringIO()):
+                prepare.main(self.argv(*extra))
+            selection = json.loads((out / "selection.json").read_text())
+            self.assertEqual(selection["reasoning_effort"], effort)
+            self.assertEqual(selection["max_ai_credits"], credits)
+
+    @unittest.expectedFailure
+    def test_bad_session_tuning_is_refused(self) -> None:
+        """The selection re-checks what the workflow's Check inputs checked."""
+        with redirect_stdout(io.StringIO()):
+            prepare.main(self.argv("--reasoning-effort", "low"))
+        for extra in (
+            ("--reasoning-effort", "extreme"),
+            ("--max-ai-credits", "0"),
+            ("--max-ai-credits", "1.5"),
+        ):
+            with (
+                self.subTest(extra=extra),
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as caught,
+            ):
+                prepare.main(self.argv(*extra))
+            self.assertEqual(caught.exception.code, 1)
+
     def test_negative_cap_and_missing_ledger_refused(self) -> None:
         """Bad arguments exit 1 before anything is written."""
         for argv in (
