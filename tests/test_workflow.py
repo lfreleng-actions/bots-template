@@ -48,6 +48,7 @@ REUSABLE_CALL = "$/.github/workflows/bot.yaml"
 TRUSTED_JOBS = ("prepare", "apply", "report")
 CALLER_PERMISSIONS = {"contents": "read", "actions": "read"}
 PREFLIGHT = "Pre-flight: workflow contracts and audit"
+APP_PERMISSIONS = "Pre-flight: App permissions"
 # The prepare job's uv steps, which the planted-workspace job runs verbatim.
 UV_STEPS = ("Set up uv", "Install Python", "Install zizmor", PREFLIGHT)
 # setup-uv's own "uv python find" must not reach any interpreter the
@@ -276,6 +277,50 @@ class PrepareContracts(ReusableWorkflowCase):
         )
         self.assertEqual(env["COPILOT_GITHUB_TOKEN"], "${{ secrets.copilot_token }}")
         self.assertEqual(env["ASSETS_SHA"], "${{ steps.pinned.outputs.sha }}")
+
+    @unittest.expectedFailure
+    def test_app_permissions_gate_runs_before_the_read_mint(self) -> None:
+        """The App's own grants are checked after the config and before a mint."""
+        order = [
+            self.position("prepare", "Pre-flight: configuration and credentials"),
+            self.position("prepare", APP_PERMISSIONS),
+            self.position("prepare", "app-token"),
+        ]
+        self.assertEqual(order, sorted(order))
+        gate = self.step("prepare", APP_PERMISSIONS)
+        self.assertEqual(gate["if"], "inputs.github_app_client_id != ''")
+        run = flatten(gate["run"])
+        self.assertIn(
+            "python3 bot-assets/scripts/preflight.py app-permissions"
+            " --config bot-assets/config/bot.json",
+            run,
+        )
+        self.assertNotIn("${{", run)
+
+    @unittest.expectedFailure
+    def test_app_permissions_gate_holds_the_key_in_its_env_alone(self) -> None:
+        """The key reaches the gate through env, and only the expected steps."""
+        gate = self.step("prepare", APP_PERMISSIONS)
+        self.assertEqual(
+            gate["env"],
+            {
+                "BOT_APP_CLIENT_ID": "${{ inputs.github_app_client_id }}",
+                "BOT_APP_PRIVATE_KEY": "${{ secrets.github_app_private_key }}",
+            },
+        )
+        holders = {
+            str(step.get("name"))
+            for step in self.steps("prepare")
+            if "secrets.github_app_private_key" in dumped(step)
+        }
+        self.assertEqual(
+            holders,
+            {
+                "Pre-flight: configuration and credentials",
+                APP_PERMISSIONS,
+                "Mint read-only App token",
+            },
+        )
 
     def test_zizmor_is_pinned(self) -> None:
         """The audit tool installs at one exact version."""
