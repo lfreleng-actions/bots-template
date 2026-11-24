@@ -299,7 +299,7 @@ The invocation:
   --no-auto-update --no-color`: no interaction, no instructions from
   the runner's home, no MCP servers, no self-update at run time.
 - `--share=artefacts/session-summary.md`: the session summary whose
-  last fenced `json` block is the verdict.
+  final fenced block, which must be `json`, is the verdict.
 - `--usage-output-file artefacts/usage.json` and
   `--log-dir=artefacts/copilot-logs`.
 - `COPILOT_HOME` under `$RUNNER_TEMP`, deleted afterwards along with
@@ -829,7 +829,7 @@ module rather than the file.
 
 ### 15.4 Agent verdict (agent to apply; untrusted)
 
-The last fenced `json` block of `session-summary.md`:
+The final fenced block of `session-summary.md`, which must be `json`:
 
 ```json
 {
@@ -844,6 +844,14 @@ The last fenced `json` block of `session-summary.md`:
   "injection_attempts": []
 }
 ```
+
+The check walks the summary's fences once, pairing each opener with
+the next fence of the same character, at least as long, with nothing
+after it. The summary holds the whole session, the prompt's example
+block and every tool output among it, so the final block alone
+counts: when a fenced block of another kind follows the verdict, or
+the final fence never closes, there is no verdict, and an earlier
+`json` block never stands in for it.
 
 `verdict` is `act` or `needs-human`. The placeholder check refuses a
 block whose `schema` is not 1, whose `repository`, `number` or

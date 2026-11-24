@@ -3,11 +3,12 @@
 
 """Template placeholder: corroborate an agent's verdict, then make the one write.
 
-``check`` takes the final fenced ``json`` block of the accepted
-``session-summary.md`` as the verdict, refuses one about another
-target, writes ``check.json`` and prints ``approvable=true`` when the
-write mint may run. ``apply`` turns the check into ``result.json``: a
-dry run records what it would have done, a live run makes the write.
+``check`` takes the final fenced block of the accepted
+``session-summary.md``, which must be ``json``, as the verdict,
+refuses one about another target, writes ``check.json`` and prints
+``approvable=true`` when the write mint may run. ``apply`` turns the
+check into ``result.json``: a dry run records what it would have
+done, a live run makes the write.
 The session is hostile input whatever its name says; replace
 ``perform_write`` with the bot's live validation and its one write.
 """
@@ -24,7 +25,11 @@ from bot_evidence import MAX_SUMMARY_BYTES, read_regular
 
 SCHEMA = 1
 AGENT_VERDICTS = frozenset({"act", "needs-human"})
-FENCE_RE = re.compile(r"```json[ \t]*\n(.*?)\n```", re.DOTALL)
+# Every fence counts, not only completed json blocks: otherwise a
+# truncated or mislabelled final answer falls back to an earlier block,
+# such as the prompt's example. The quantifiers are possessive, so a
+# failed match never gives characters back and no line is read twice.
+FENCE_RE = re.compile(r"^[ \t]*+(`{3,}+|~{3,}+)([^\r\n]*+)\r?$", re.MULTILINE)
 IDENTITY = ("key", "repository", "number", "head_sha")
 
 
@@ -51,12 +56,42 @@ def find_target(selection: dict[str, Any], key: str) -> dict[str, Any]:
     return matches[0]
 
 
+def final_json_block(summary: str) -> str | None:
+    """The body of the summary's final fenced block, when it is closed json.
+
+    One pass pairs each opener with its closer: a fence of the same
+    character, at least as long, with nothing after it. Fences inside
+    a block are its content. An unterminated final fence, or a final
+    block of any other kind, yields None. The opener's character and
+    length are read once, from offsets, so a long opener is never
+    copied again for each fence inside its block.
+    """
+    opener: re.Match[str] | None = None
+    opener_char = ""
+    opener_len = 0
+    body: str | None = None
+    for fence in FENCE_RE.finditer(summary):
+        start, end = fence.span(1)
+        if opener is None:
+            opener, body = fence, None
+            opener_char, opener_len = summary[start], end - start
+        elif (
+            summary[start] == opener_char
+            and end - start >= opener_len
+            and not fence[2].strip()
+        ):
+            if opener[2].strip() == "json":
+                body = summary[opener.end() : fence.start()]
+            opener = None
+    return None if opener is not None else body
+
+
 def verdict_block(summary: str) -> dict[str, Any] | None:
-    """The last fenced json block of the session summary, or None."""
-    blocks = FENCE_RE.findall(summary)
+    """The final fenced block of the session summary as an object, or None."""
+    body = final_json_block(summary)
     try:
-        parsed: Any = json.loads(blocks[-1]) if blocks else None
-    except ValueError:
+        parsed: Any = None if body is None else json.loads(body)
+    except (ValueError, RecursionError):
         return None
     return cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else None
 

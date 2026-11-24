@@ -70,12 +70,10 @@ class VerdictBlockTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(apply.verdict_block(text))
 
-    @unittest.expectedFailure
     def test_deep_nesting_is_none(self) -> None:
         """A block nested past the parser's recursion limit is no verdict."""
         self.assertIsNone(apply.verdict_block(summary_with("[" * 100_000)))
 
-    @unittest.expectedFailure
     def test_a_later_block_of_another_kind_is_no_verdict(self) -> None:
         """An earlier json block never stands in for the final one."""
         verdict = summary_with(json.dumps(block()))
@@ -83,7 +81,6 @@ class VerdictBlockTest(unittest.TestCase):
             with self.subTest(later=later):
                 self.assertIsNone(apply.verdict_block(f"{verdict}\n{later}\n"))
 
-    @unittest.expectedFailure
     def test_an_unterminated_final_fence_is_no_verdict(self) -> None:
         """A final fence that never closes hides every earlier block."""
         verdict = summary_with(json.dumps(block()))
@@ -95,7 +92,6 @@ class VerdictBlockTest(unittest.TestCase):
             with self.subTest(tail=tail):
                 self.assertIsNone(apply.verdict_block(f"{verdict}\n{tail}\n"))
 
-    @unittest.expectedFailure
     def test_a_tilde_fence_closes_with_tildes_alone(self) -> None:
         """A closer repeats the opener's character, at least as many times."""
         body = json.dumps(block())
@@ -105,14 +101,20 @@ class VerdictBlockTest(unittest.TestCase):
         decoy = f"````md\n```json\n{body}\n```\n````\n"
         self.assertIsNone(apply.verdict_block(decoy))
 
-    @unittest.expectedFailure
     def test_unclosed_openers_take_linear_time(self) -> None:
-        """100,000 openers that never close are read within a second."""
+        """Many unclosed openers, or one long opener, are read within a second.
+
+        The last text holds a megabyte-long opener and 200,000 fences
+        inside its block; comparing each against a fresh copy of the
+        opener would take far longer than the timeout.
+        """
         script = (
             "import sys, time\n"
             f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
             "import apply\n"
-            "for text in ('x```json\\n' * 100_000, '```json\\n' * 100_000):\n"
+            "long_opener = '`' * 1_000_000 + 'json\\n' + '```x\\n' * 200_000\n"
+            "for text in ('x```json\\n' * 100_000, '```json\\n' * 100_000,"
+            " long_opener):\n"
             "    start = time.perf_counter()\n"
             "    assert apply.verdict_block(text) is None\n"
             "    print(time.perf_counter() - start)\n"
