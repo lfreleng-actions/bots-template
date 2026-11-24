@@ -132,6 +132,45 @@ class ReportTest(unittest.TestCase):
         gathered = report.gather_results(self.root / "results")
         self.assertEqual(gathered["a"]["verdict"], "would-do")
 
+    @unittest.expectedFailure
+    def test_spend_and_usage_reach_the_report(self) -> None:
+        """Each result's usage is summed by model; a fallback adds nothing."""
+        self.write_selection(target("a", 1), target("b", 2), target("c", 3))
+        model = {"model": "gpt-6-astra", "requests": 7, "premium_requests": 1.0}
+        spent = {"premium_requests": 1.0, "agent_seconds": 31}
+        usage = {"usage": {"models": [model]}}
+        self.write_result("a-1", {**result("a", 1, "would-do"), **spent, **usage})
+        self.write_result("b-1", {**result("b", 2, "needs-human"), **spent, **usage})
+        self.write_result("c-1", result("c", 3, "failed"))
+        built = self.run_main()
+        self.assertEqual(built["premium_requests"], 2.0)
+        self.assertEqual(built["agent_seconds"], 62)
+        self.assertEqual(len(built["usage"]), 1)
+        total = built["usage"][0]
+        self.assertEqual(
+            (total["model"], total["sessions"], total["requests"]),
+            ("gpt-6-astra", 2, 14),
+        )
+        self.assertEqual(total["premium_requests"], 2.0)
+        text = (self.root / "out" / "report.md").read_text()
+        self.assertIn("Premium requests: 2.0; agent seconds: 62.", text)
+        self.assertIn("| Model | Sessions | Requests | Premium requests |", text)
+        self.assertIn("| gpt-6-astra | 2 | 14 | 2.0 | 0 |", text)
+
+    @unittest.expectedFailure
+    def test_no_usage_renders_no_table(self) -> None:
+        """Without a usage record the report says so, and nothing breaks."""
+        self.write_selection(target("a", 1))
+        self.write_result("a-1", result("a", 1, "would-do"))
+        built = self.run_main()
+        self.assertEqual(
+            (built["premium_requests"], built["agent_seconds"], built["usage"]),
+            (0.0, 0, []),
+        )
+        text = (self.root / "out" / "report.md").read_text()
+        self.assertIn("Token usage: none recorded.", text)
+        self.assertNotIn("| Model |", text)
+
     def test_unreadable_inputs_exit_one(self) -> None:
         """A bad selection or ledger is an operational failure."""
         (self.root / "selection.json").write_text("[]")

@@ -360,6 +360,39 @@ class MainTest(unittest.TestCase):
         _, checked = self.run_check()
         self.assertEqual(checked["findings"], [])
 
+    @unittest.expectedFailure
+    def test_session_usage_reaches_check_and_result(self) -> None:
+        """The accepted usage.json is read once and carried through."""
+        usage = {
+            "totalPremiumRequestCost": 1,
+            "totalApiDurationMs": 31330,
+            "modelMetrics": {"gpt-6-astra": {"requests": {"count": 7}}},
+        }
+        (self.root / "session" / "usage.json").write_text(json.dumps(usage))
+        self.write_session(summary_with(json.dumps(block())))
+        _, checked = self.run_check()
+        expected: dict[str, Any] = {
+            "premium_requests": 1.0,
+            "agent_seconds": 31,
+            "usage": {"models": [{"model": "gpt-6-astra", "requests": 7}]},
+        }
+        result = self.run_apply("--dry-run")
+        for written in (checked, result):
+            self.assertEqual({k: written[k] for k in expected}, expected)
+
+    @unittest.expectedFailure
+    def test_absent_or_unreadable_usage_is_null(self) -> None:
+        """No usage.json, or one that is not JSON, records nulls and still checks."""
+        self.write_session(summary_with(json.dumps(block())))
+        for content in (None, "not json", "[1, 2]"):
+            if content is not None:
+                (self.root / "session" / "usage.json").write_text(content)
+            with self.subTest(content=content):
+                flag, checked = self.run_check()
+                self.assertEqual(flag, "approvable=true")
+                for field in ("premium_requests", "agent_seconds", "usage"):
+                    self.assertIsNone(checked[field])
+
     def test_unknown_key_and_missing_session_exit_one(self) -> None:
         """Operational failures exit 1 with a prefixed message."""
         cases = (

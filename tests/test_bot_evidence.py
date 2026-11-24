@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -14,6 +15,7 @@ import unittest
 from contextlib import redirect_stderr
 from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -32,6 +34,250 @@ def digest(content: bytes) -> str:
 def expect(selection: str, ledger: str) -> list[tuple[str, str, int]]:
     """Expectations for the two sample files at the default limit."""
     return [("selection.json", selection, LIMIT), ("ledger.json", ledger, LIMIT)]
+
+
+def sample_usage() -> dict[str, Any]:
+    """What @github/copilot 1.0.105 wrote in one session, cut to the fields read."""
+    return {
+        "totalPremiumRequestCost": 1,
+        "totalNanoAiu": 51939650000,
+        "totalApiDurationMs": 31330,
+        "lastCallInputTokens": 30972,
+        "modelMetrics": {
+            "gpt-6-astra": {
+                "requests": {"count": 7, "cost": 1},
+                "usage": {
+                    "inputTokens": 122814,
+                    "outputTokens": 805,
+                    "cacheReadTokens": 91824,
+                    "cacheWriteTokens": 30969,
+                    "reasoningTokens": 80,
+                },
+                "totalNanoAiu": 51939650000,
+            }
+        },
+    }
+
+
+SAMPLE_RECORD: dict[str, Any] = {
+    "nano_aiu": 51939650000,
+    "last_call_input_tokens": 30972,
+    "models": [
+        {
+            "model": "gpt-6-astra",
+            "requests": 7,
+            "premium_requests": 1.0,
+            "input_tokens": 122814,
+            "cache_read_tokens": 91824,
+            "cache_write_tokens": 30969,
+            "output_tokens": 805,
+            "reasoning_tokens": 80,
+            "nano_aiu": 51939650000,
+        }
+    ],
+}
+
+
+def model_usage(name: str, **figures: Any) -> dict[str, Any]:
+    """One model's record as a result file carries it."""
+    row: dict[str, Any] = {
+        "model": name,
+        "requests": 7,
+        "premium_requests": 1.0,
+        "input_tokens": 100,
+        "cache_read_tokens": 60,
+        "cache_write_tokens": 30,
+        "output_tokens": 8,
+        "reasoning_tokens": 2,
+        "nano_aiu": 1000,
+    }
+    row.update(figures)
+    return row
+
+
+class SessionUsageTest(unittest.TestCase):
+    """``session_usage`` reads an untrusted usage.json into three fields."""
+
+    @unittest.expectedFailure
+    def test_the_sample_reads_into_the_record(self) -> None:
+        """Every figure of the sample lands under its own name."""
+        got = evidence.session_usage(sample_usage())
+        self.assertEqual(
+            got,
+            {"premium_requests": 1.0, "agent_seconds": 31, "usage": SAMPLE_RECORD},
+        )
+        self.assertIsInstance(got["premium_requests"], float)
+        self.assertIsInstance(got["usage"]["models"][0]["premium_requests"], float)
+
+    @unittest.expectedFailure
+    def test_a_bad_figure_is_left_out(self) -> None:
+        """A non-finite, negative, boolean or non-numeric figure is dropped alone."""
+        for bad in (float("inf"), float("nan"), -1, True, "7", None, 10**400):
+            usage = sample_usage()
+            usage["totalNanoAiu"] = bad
+            usage["totalPremiumRequestCost"] = bad
+            usage["totalApiDurationMs"] = bad
+            metrics = usage["modelMetrics"]["gpt-6-astra"]
+            metrics["requests"]["count"] = bad
+            metrics["usage"]["outputTokens"] = bad
+            with self.subTest(bad=bad):
+                got = evidence.session_usage(usage)
+                self.assertIsNone(got["premium_requests"])
+                self.assertIsNone(got["agent_seconds"])
+                self.assertNotIn("nano_aiu", got["usage"])
+                model = got["usage"]["models"][0]
+                self.assertNotIn("requests", model)
+                self.assertNotIn("output_tokens", model)
+                self.assertEqual(model["reasoning_tokens"], 80)
+
+    @unittest.expectedFailure
+    def test_a_count_is_stored_as_an_integer(self) -> None:
+        """A count written as a float is kept as an int; a cost stays a float."""
+        usage = sample_usage()
+        usage["lastCallInputTokens"] = 30972.0
+        usage["totalApiDurationMs"] = 31999.9
+        got = evidence.session_usage(usage)
+        self.assertEqual(got["agent_seconds"], 31)
+        self.assertIsInstance(got["usage"]["last_call_input_tokens"], int)
+
+    @unittest.expectedFailure
+    def test_a_model_name_outside_the_pattern_is_left_out(self) -> None:
+        """Only a lower-case model identifier of at most 100 characters is kept."""
+        usage = sample_usage()
+        metrics = usage["modelMetrics"]
+        sample = metrics["gpt-6-astra"]
+        for name in ("GPT-6", "gpt 6", "@someone", "x" * 101, "", "a|b", "a\n"):
+            metrics[name] = sample
+        metrics["y" * 100] = sample
+        metrics["not-an-object"] = [1, 2]
+        names = [m["model"] for m in evidence.session_usage(usage)["usage"]["models"]]
+        self.assertEqual(names, ["gpt-6-astra", "y" * 100])
+
+    @unittest.expectedFailure
+    def test_a_ninth_model_is_dropped(self) -> None:
+        """At most eight models are kept, sorted by name."""
+        usage = sample_usage()
+        sample = usage["modelMetrics"].pop("gpt-6-astra")
+        usage["modelMetrics"] = {f"model-{n}": sample for n in range(9, 0, -1)}
+        names = [m["model"] for m in evidence.session_usage(usage)["usage"]["models"]]
+        self.assertEqual(names, [f"model-{n}" for n in range(1, 9)])
+
+    @unittest.expectedFailure
+    def test_a_model_with_no_figure_is_left_out(self) -> None:
+        """An empty model is dropped before the limit and cannot displace one."""
+        usage = sample_usage()
+        usage["modelMetrics"].update(
+            {f"a-{n}": {"requests": {"count": True}} for n in range(8)}
+        )
+        got = evidence.session_usage(usage)
+        self.assertEqual(got["usage"]["models"], SAMPLE_RECORD["models"])
+
+    @unittest.expectedFailure
+    def test_no_file_yields_nulls(self) -> None:
+        """No file, a file of another shape, or no usage figure gives nulls."""
+        nulls = {"premium_requests": None, "agent_seconds": None, "usage": None}
+        odd: list[Any] = [None, [], "usage", 3, {}, {"modelMetrics": "nope"}]
+        for value in odd:
+            with self.subTest(value=value):
+                self.assertEqual(evidence.session_usage(value), nulls)
+        cost_alone = evidence.session_usage({"totalPremiumRequestCost": 2})
+        self.assertEqual(cost_alone, {**nulls, "premium_requests": 2.0})
+
+    @unittest.expectedFailure
+    def test_odd_shapes_never_raise(self) -> None:
+        """Every nested object may be anything; nothing raises."""
+        shapes: list[Any] = [
+            {"gpt-6-astra": {"requests": "x", "usage": 5, "totalNanoAiu": []}},
+            {"gpt-6-astra": {"requests": {"count": {}}, "usage": {"inputTokens": []}}},
+            ["gpt-6-astra"],
+        ]
+        for metrics in shapes:
+            with self.subTest(metrics=metrics):
+                got = evidence.session_usage({"modelMetrics": metrics})
+                self.assertIsNone(got["usage"])
+
+
+class UsageTotalsTest(unittest.TestCase):
+    """Totals across result files, each figure checked again as it is summed."""
+
+    @unittest.expectedFailure
+    def test_totals_by_model_across_results(self) -> None:
+        """Each model counts the sessions that used it and sums each figure."""
+        results: list[dict[str, Any]] = [
+            {"usage": {"models": [model_usage("gpt-6-astra"), model_usage("b-model")]}},
+            {"usage": {"models": [model_usage("gpt-6-astra", premium_requests=0.5)]}},
+        ]
+        doubled = model_usage(
+            "gpt-6-astra",
+            requests=14,
+            premium_requests=1.5,
+            input_tokens=200,
+            cache_read_tokens=120,
+            cache_write_tokens=60,
+            output_tokens=16,
+            reasoning_tokens=4,
+            nano_aiu=2000,
+        )
+        self.assertEqual(
+            evidence.usage_totals(results),
+            [
+                {**model_usage("b-model"), "sessions": 1},
+                {**doubled, "sessions": 2},
+            ],
+        )
+
+    @unittest.expectedFailure
+    def test_absent_or_malformed_usage_adds_nothing(self) -> None:
+        """A result file is a claim: anything malformed is skipped, alone."""
+        forged = model_usage(
+            "gpt-6-astra",
+            requests=True,
+            premium_requests=float("inf"),
+            input_tokens=-1,
+            cache_read_tokens="9",
+            cache_write_tokens=1.5,
+            output_tokens=None,
+            reasoning_tokens=float("nan"),
+            nano_aiu=10**400,
+        )
+        bad_rows = ["gpt-6-astra", {"model": "Bad Name", "requests": 5}, forged]
+        results: list[dict[str, Any]] = [
+            {"usage": {"models": [model_usage("gpt-6-astra")]}},
+            {},
+            {"usage": None},
+            {"usage": "lots"},
+            {"usage": {"models": "many"}},
+            {"usage": {"models": bad_rows}},
+        ]
+        self.assertEqual(
+            evidence.usage_totals(results),
+            [{**model_usage("gpt-6-astra"), "sessions": 1}],
+        )
+
+    @unittest.expectedFailure
+    def test_a_total_stays_finite_and_bounded(self) -> None:
+        """A total never passes a finite number; a result reads eight models."""
+        big = model_usage("gpt-6-astra", premium_requests=1e308, nano_aiu=10**308)
+        totals = evidence.usage_totals([{"usage": {"models": [big]}}] * 2)
+        self.assertEqual(totals[0]["premium_requests"], 1e308)
+        self.assertEqual(totals[0]["nano_aiu"], 10**308)
+        self.assertEqual(totals[0]["requests"], 14)
+        json.dumps(totals, allow_nan=False)
+        many = [model_usage(f"model-{n}") for n in range(1, 21)]
+        self.assertEqual(len(evidence.usage_totals([{"usage": {"models": many}}])), 8)
+
+    @unittest.expectedFailure
+    def test_spend_sums_checked_figures(self) -> None:
+        """Premium requests and agent seconds add up; odd values add nothing."""
+        results: list[dict[str, Any]] = [
+            {"premium_requests": 1.0, "agent_seconds": 31},
+            {"premium_requests": 0.333, "agent_seconds": 9},
+            {"premium_requests": True, "agent_seconds": 2.5},
+            {"premium_requests": float("nan"), "agent_seconds": -4},
+            {"premium_requests": None, "agent_seconds": None},
+            {},
+        ]
+        self.assertEqual(evidence.spend_totals(results), (1.33, 40))
 
 
 class ReadRegularTest(unittest.TestCase):
