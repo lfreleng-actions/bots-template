@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,7 +16,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 
 apply = import_module("apply")
 
@@ -50,11 +52,16 @@ def summary_with(*blocks: str) -> str:
 
 
 class VerdictBlockTest(unittest.TestCase):
-    """The last fenced json block is the verdict; anything else is none."""
+    """The final fenced block is the verdict when it is json; else none."""
 
     def test_last_block_wins(self) -> None:
         """Earlier blocks are prose the agent wrote; the final one counts."""
         text = summary_with('{"draft": true}', json.dumps(block()))
+        self.assertEqual(apply.verdict_block(text), block())
+
+    def test_prose_after_the_final_block_is_ignored(self) -> None:
+        """Text after the final fence closes leaves the block the verdict."""
+        text = summary_with(json.dumps(block())) + "\nThat is all.\n"
         self.assertEqual(apply.verdict_block(text), block())
 
     def test_missing_or_malformed_block_is_none(self) -> None:
@@ -62,6 +69,66 @@ class VerdictBlockTest(unittest.TestCase):
         for text in ("no fence", summary_with("{not json"), summary_with("[1]")):
             with self.subTest(text=text):
                 self.assertIsNone(apply.verdict_block(text))
+
+    @unittest.expectedFailure
+    def test_deep_nesting_is_none(self) -> None:
+        """A block nested past the parser's recursion limit is no verdict."""
+        self.assertIsNone(apply.verdict_block(summary_with("[" * 100_000)))
+
+    @unittest.expectedFailure
+    def test_a_later_block_of_another_kind_is_no_verdict(self) -> None:
+        """An earlier json block never stands in for the final one."""
+        verdict = summary_with(json.dumps(block()))
+        for later in ("```\nplain\n```", "```text\nout\n```", "~~~py\nx = 1\n~~~"):
+            with self.subTest(later=later):
+                self.assertIsNone(apply.verdict_block(f"{verdict}\n{later}\n"))
+
+    @unittest.expectedFailure
+    def test_an_unterminated_final_fence_is_no_verdict(self) -> None:
+        """A final fence that never closes hides every earlier block."""
+        verdict = summary_with(json.dumps(block()))
+        for tail in (
+            '```json\n{"schema": 1',
+            "```\nlog output",
+            "````json\n" + json.dumps(block()) + "\n```",
+        ):
+            with self.subTest(tail=tail):
+                self.assertIsNone(apply.verdict_block(f"{verdict}\n{tail}\n"))
+
+    @unittest.expectedFailure
+    def test_a_tilde_fence_closes_with_tildes_alone(self) -> None:
+        """A closer repeats the opener's character, at least as many times."""
+        body = json.dumps(block())
+        self.assertEqual(apply.verdict_block(f"~~~json\n{body}\n~~~\n"), block())
+        self.assertEqual(apply.verdict_block(f"```json\n{body}\n`````\n"), block())
+        self.assertIsNone(apply.verdict_block(f"~~~json\n{body}\n```\n"))
+        decoy = f"````md\n```json\n{body}\n```\n````\n"
+        self.assertIsNone(apply.verdict_block(decoy))
+
+    @unittest.expectedFailure
+    def test_unclosed_openers_take_linear_time(self) -> None:
+        """100,000 openers that never close are read within a second."""
+        script = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
+            "import apply\n"
+            "for text in ('x```json\\n' * 100_000, '```json\\n' * 100_000):\n"
+            "    start = time.perf_counter()\n"
+            "    assert apply.verdict_block(text) is None\n"
+            "    print(time.perf_counter() - start)\n"
+        )
+        try:
+            ran = subprocess.run(
+                [sys.executable, "-B", "-c", script],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("verdict_block ran past five seconds")
+        for elapsed in ran.stdout.split():
+            self.assertLess(float(elapsed), 1.0)
 
 
 class CheckVerdictTest(unittest.TestCase):
