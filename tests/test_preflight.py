@@ -70,6 +70,45 @@ class ConfigTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(preflight.Drift):
                 preflight.check_config(path)
 
+    def test_forbidden_permissions_are_read_from_the_config(self) -> None:
+        """A list of permission names comes back; absent means none."""
+        names = ["administration", "organization_administration"]
+        with redirect_stdout(io.StringIO()):
+            listed = preflight.check_config(
+                write_config(self.root, forbidden_permissions=names)
+            )
+            bare = preflight.check_config(write_config(self.root))
+        self.assertEqual(preflight.forbidden_permissions(listed), names)
+        self.assertEqual(preflight.forbidden_permissions(bare), [])
+
+    def test_malformed_forbidden_permissions_are_drift(self) -> None:
+        """Only a list of lower-case words joined by underscores passes."""
+        with redirect_stdout(io.StringIO()):
+            preflight.check_config(
+                write_config(self.root, forbidden_permissions=["administration"])
+            )
+        for value in (
+            "administration",
+            {"administration": True},
+            ["Administration"],
+            ["pull-requests"],
+            ["administration2"],
+            ["_administration"],
+            [""],
+            [7],
+            None,
+        ):
+            with self.subTest(value=value), self.assertRaises(preflight.Drift):
+                preflight.check_config(
+                    write_config(self.root, forbidden_permissions=value)
+                )
+
+    def test_template_config_forbids_administration(self) -> None:
+        """The template ships with the grant no bot of this shape needs."""
+        with redirect_stdout(io.StringIO()):
+            config = preflight.check_config(ROOT / "config" / "bot.json")
+        self.assertEqual(preflight.forbidden_permissions(config), ["administration"])
+
 
 class CredentialTest(unittest.TestCase):
     """``check_credentials`` validates shape alone and never echoes a value."""
@@ -210,6 +249,33 @@ class IdentityAndTokenTest(unittest.TestCase):
                 preflight.check_token_read_only()
 
 
+class AppPermissionsTest(unittest.TestCase):
+    """The App's own record must grant no forbidden permission at any level."""
+
+    def test_forbidden_grant_at_any_level_is_drift(self) -> None:
+        """Read and write both fail, naming the permission."""
+        for level in ("read", "write"):
+            with (
+                self.subTest(level=level),
+                self.assertRaises(preflight.Drift) as caught,
+            ):
+                preflight.check_app_permissions(
+                    ["administration"],
+                    {"administration": level, "contents": "write"},
+                )
+            self.assertIn("administration", str(caught.exception))
+
+    def test_absent_grant_passes(self) -> None:
+        """Other permissions, at any level, are not this check's business."""
+        out = io.StringIO()
+        with redirect_stdout(out):
+            preflight.check_app_permissions(
+                ["administration"], {"contents": "write", "metadata": "read"}
+            )
+            preflight.check_app_permissions([], {"administration": "write"})
+        self.assertIn("preflight: ok", out.getvalue())
+
+
 class WorkflowAuditTest(unittest.TestCase):
     """The checked-in workflows pass their own contracts and zizmor."""
 
@@ -270,6 +336,98 @@ class CliTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 1)
         self.assertIn("::error::preflight:", err.getvalue())
         self.assertNotIn("ghp_wrong", err.getvalue())
+
+    def run_app_permissions(
+        self, env: dict[str, str], grants: Any, **config: Any
+    ) -> tuple[int | str | None, str, list[tuple[str, str]]]:
+        """Run app-permissions with the App record stubbed.
+
+        Return the exit code, everything printed, and the credentials
+        each read of the record was given. ``grants`` is the record's
+        permissions, or an exception the read raises.
+        """
+        out = io.StringIO()
+        calls: list[tuple[str, str]] = []
+        code: int | str | None = 0
+
+        def read(client_id: str, private_key: str) -> Any:
+            calls.append((client_id, private_key))
+            if isinstance(grants, Exception):
+                raise grants
+            return grants
+
+        with tempfile.TemporaryDirectory() as holder:
+            path = write_config(Path(holder), **config)
+            with (
+                patch.dict(preflight.os.environ, env, clear=True),
+                patch.object(preflight.bot_app, "app_permissions", side_effect=read),
+                redirect_stdout(out),
+                redirect_stderr(out),
+            ):
+                try:
+                    preflight.main(["app-permissions", "--config", str(path)])
+                except SystemExit as exc:
+                    code = exc.code
+        return code, out.getvalue(), calls
+
+    def test_app_permissions_command_refuses_a_forbidden_grant(self) -> None:
+        """Exit one naming the grant; the key is read, never printed."""
+        env = {"BOT_APP_CLIENT_ID": CLIENT_ID, "BOT_APP_PRIVATE_KEY": PEM}
+        code, output, calls = self.run_app_permissions(
+            env, {"administration": "read"}, forbidden_permissions=["administration"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("::error::preflight:", output)
+        self.assertIn("administration", output)
+        self.assertEqual(calls, [(CLIENT_ID, PEM)])
+        for secret in (PEM, "MIIEpAIBAAKCAQEA", CLIENT_ID):
+            self.assertNotIn(secret, output)
+
+    def test_app_permissions_command_passes_a_clean_app(self) -> None:
+        """An App without the grant passes and says what it checked."""
+        env = {"BOT_APP_CLIENT_ID": CLIENT_ID, "BOT_APP_PRIVATE_KEY": PEM}
+        code, output, calls = self.run_app_permissions(
+            env, {"contents": "write"}, forbidden_permissions=["administration"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("preflight: ok", output)
+        self.assertEqual(len(calls), 1)
+
+    def test_app_permissions_command_fails_closed_on_a_failed_read(self) -> None:
+        """A record that cannot be read fails the run, naming no secret."""
+        env = {"BOT_APP_CLIENT_ID": CLIENT_ID, "BOT_APP_PRIVATE_KEY": PEM}
+        code, output, _ = self.run_app_permissions(
+            env,
+            preflight.bot_app.AppError("GET /app answered HTTP 401"),
+            forbidden_permissions=["administration"],
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("::error::preflight:", output)
+        self.assertIn("HTTP 401", output)
+        self.assertNotIn("MIIEpAIBAAKCAQEA", output)
+
+    def test_app_permissions_command_needs_both_credentials(self) -> None:
+        """Without a client id and a key there is no record to read."""
+        for env in (
+            {"BOT_APP_PRIVATE_KEY": PEM},
+            {"BOT_APP_CLIENT_ID": CLIENT_ID},
+        ):
+            with self.subTest(env=sorted(env)):
+                code, output, calls = self.run_app_permissions(
+                    env, {}, forbidden_permissions=["administration"]
+                )
+                self.assertEqual(code, 1)
+                self.assertIn("::error::preflight:", output)
+                self.assertEqual(calls, [])
+
+    def test_app_permissions_command_with_nothing_forbidden_reads_nothing(
+        self,
+    ) -> None:
+        """A bot that forbids nothing makes no request and needs no key."""
+        code, output, calls = self.run_app_permissions({}, {"administration": "write"})
+        self.assertEqual(code, 0)
+        self.assertIn("preflight: ok", output)
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

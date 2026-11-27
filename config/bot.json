@@ -1,4 +1,5 @@
 {
   "app_slug": "replace-me-bot",
-  "description": "The GitHub App slug this bot runs as. The pre-flight gate refuses a token minted by any App but this slug, so a mis-wired key fails before a session starts. Replace the placeholder with the bot's App slug."
+  "forbidden_permissions": ["administration"],
+  "description": "The GitHub App slug this bot runs as, and the App permissions it must never hold. The pre-flight gate refuses a token minted by any App but this slug, so a mis-wired key fails before a session starts, and refuses to run while the App holds any forbidden permission at any level, since an App holds its permissions on every installation at once. Replace the placeholder with the bot's App slug, and add to the list any permission the bot no longer needs."
 }

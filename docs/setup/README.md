@@ -39,6 +39,12 @@ and nothing else. Create it under the organisation:
   write* with the reads its CI gates use; a bot that pushes code adds
   *Contents: write* where it pushes. Grant no permission the
   workflow does not mint.
+- **Forbidden permissions**: list in `config/bot.json` under
+  `forbidden_permissions` every permission the App must never hold;
+  the template lists `administration`. The pre-flight gate reads the
+  App's own record before each run and refuses to start while the
+  App holds one at any level, so removing a grant in the App's
+  settings is a step the gate enforces rather than one to remember.
 - **Installation**: install on the organisation, covering every
   repository the scan should see. "All repositories" matches an
   organisation-wide scan.
@@ -221,10 +227,13 @@ needs rolling back.
   made.
 - **A pre-flight failure.** The annotation names the check and
   quotes nothing it read. A `config` failure means a credential
-  shape or the egress coordinate is wrong; an `identity` failure
-  means another App's key sits behind the mint; a `workflow` failure
-  means a merged change broke a contract test or a zizmor rule. Fix
-  the cause; the gate holds the run closed until then.
+  shape or the egress coordinate is wrong; an `app-permissions`
+  failure names a permission the App holds that `config/bot.json`
+  forbids: remove it in the App's settings, not the workflow;
+  an `identity` failure means another App's key sits behind the
+  mint; a `workflow` failure means a merged change broke a contract
+  test or a zizmor rule. Fix the cause; the gate holds the run
+  closed until then.
 
 ## GitHub Pages
 

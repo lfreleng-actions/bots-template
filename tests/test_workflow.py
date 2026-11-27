@@ -48,6 +48,7 @@ REUSABLE_CALL = "$/.github/workflows/bot.yaml"
 TRUSTED_JOBS = ("prepare", "apply", "report")
 CALLER_PERMISSIONS = {"contents": "read", "actions": "read"}
 PREFLIGHT = "Pre-flight: workflow contracts and audit"
+APP_PERMISSIONS = "Pre-flight: App permissions"
 # The prepare job's uv steps, which the planted-workspace job runs verbatim.
 UV_STEPS = ("Set up uv", "Install Python", "Install zizmor", PREFLIGHT)
 # setup-uv's own "uv python find" must not reach any interpreter the
@@ -76,6 +77,13 @@ SETUP_UV_STEPS = 5
 COMMIT_PIN = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 SECRET_REFERENCE = re.compile(r"secrets\.[A-Za-z0-9_]+")
 ALLOW_CONFIG = re.compile(r"^@[0-9a-f]{40}$")
+# The Copilot CLI's --reasoning-effort levels (1.0.105 --help).
+CLI_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+TUNING_INPUTS = ("reasoning_effort", "max_ai_credits")
+TUNING_ENV = {
+    "REASONING_EFFORT": "${{ inputs.reasoning_effort }}",
+    "MAX_AI_CREDITS": "${{ inputs.max_ai_credits }}",
+}
 
 
 def squash(text: str) -> str:
@@ -107,6 +115,20 @@ def load_jobs(path: Path) -> dict[str, dict[str, Any]]:
     """Parse a workflow file and return its jobs."""
     loaded = cast(dict[str, Any], yaml.safe_load(path.read_text(encoding="utf-8")))
     return cast(dict[str, dict[str, Any]], loaded["jobs"])
+
+
+def bash_five() -> str:
+    """A Bash 5, as ubuntu-latest runs steps with, or skip the case."""
+    bash = shutil.which("bash")
+    if bash is None:
+        raise unittest.SkipTest("running a step needs Bash 5+")
+    result = subprocess.run(
+        [bash, "--version"], capture_output=True, text=True, check=True, timeout=5
+    )
+    version = re.search(r"version (\d+)", result.stdout)
+    if version is None or int(version[1]) < 5:
+        raise unittest.SkipTest("Bash 5+ is required to match ubuntu-latest")
+    return bash
 
 
 def runnable(step: dict[str, Any]) -> dict[str, Any]:
@@ -276,6 +298,48 @@ class PrepareContracts(ReusableWorkflowCase):
         )
         self.assertEqual(env["COPILOT_GITHUB_TOKEN"], "${{ secrets.copilot_token }}")
         self.assertEqual(env["ASSETS_SHA"], "${{ steps.pinned.outputs.sha }}")
+
+    def test_app_permissions_gate_runs_before_the_read_mint(self) -> None:
+        """The App's own grants are checked after the config and before a mint."""
+        order = [
+            self.position("prepare", "Pre-flight: configuration and credentials"),
+            self.position("prepare", APP_PERMISSIONS),
+            self.position("prepare", "app-token"),
+        ]
+        self.assertEqual(order, sorted(order))
+        gate = self.step("prepare", APP_PERMISSIONS)
+        self.assertEqual(gate["if"], "inputs.github_app_client_id != ''")
+        run = flatten(gate["run"])
+        self.assertIn(
+            "python3 bot-assets/scripts/preflight.py app-permissions"
+            " --config bot-assets/config/bot.json",
+            run,
+        )
+        self.assertNotIn("${{", run)
+
+    def test_app_permissions_gate_holds_the_key_in_its_env_alone(self) -> None:
+        """The key reaches the gate through env, and only the expected steps."""
+        gate = self.step("prepare", APP_PERMISSIONS)
+        self.assertEqual(
+            gate["env"],
+            {
+                "BOT_APP_CLIENT_ID": "${{ inputs.github_app_client_id }}",
+                "BOT_APP_PRIVATE_KEY": "${{ secrets.github_app_private_key }}",
+            },
+        )
+        holders = {
+            str(step.get("name"))
+            for step in self.steps("prepare")
+            if "secrets.github_app_private_key" in dumped(step)
+        }
+        self.assertEqual(
+            holders,
+            {
+                "Pre-flight: configuration and credentials",
+                APP_PERMISSIONS,
+                "Mint read-only App token",
+            },
+        )
 
     def test_zizmor_is_pinned(self) -> None:
         """The audit tool installs at one exact version."""
@@ -623,6 +687,8 @@ class InputContracts(ReusableWorkflowCase):
                 "org",
                 "dry_run",
                 "model",
+                "reasoning_effort",
+                "max_ai_credits",
                 "repositories",
                 "exclude_repos",
                 "max_targets",
@@ -659,6 +725,31 @@ class InputContracts(ReusableWorkflowCase):
         self.assertEqual(inputs["max_targets"]["default"], "20")
         self.assertEqual(inputs["assets_ref"]["default"], "")
 
+    def test_session_tuning_inputs_default_to_nothing(self) -> None:
+        """Both are strings, and empty passes neither flag."""
+        inputs = self.triggers["workflow_call"]["inputs"]
+        for name in TUNING_INPUTS:
+            with self.subTest(input=name):
+                self.assertEqual(inputs[name]["type"], "string")
+                self.assertEqual(inputs[name]["default"], "")
+
+    def test_session_tuning_travels_by_env_alone(self) -> None:
+        """Check inputs, the selection and the session read env, not expressions."""
+        for job, identity in (
+            ("prepare", "budget"),
+            ("prepare", "Prepare evidence"),
+            ("agent", "agent"),
+        ):
+            step = self.step(job, identity)
+            with self.subTest(step=identity):
+                for name, value in TUNING_ENV.items():
+                    self.assertEqual(step["env"][name], value)
+                self.assertNotIn("inputs.reasoning_effort", step["run"])
+                self.assertNotIn("inputs.max_ai_credits", step["run"])
+        prepare = flatten(self.step("prepare", "Prepare evidence")["run"])
+        self.assertIn('--reasoning-effort "$REASONING_EFFORT"', prepare)
+        self.assertIn('--max-ai-credits "$MAX_AI_CREDITS"', prepare)
+
 
 class CronContracts(WorkflowCase):
     """The scheduled and dispatched caller."""
@@ -679,7 +770,15 @@ class CronContracts(WorkflowCase):
         """The form offers the operator the template's tunables."""
         inputs = self.triggers["workflow_dispatch"]["inputs"]
         self.assertEqual(
-            set(inputs), {"dry_run", "model", "repositories", "max_targets"}
+            set(inputs),
+            {
+                "dry_run",
+                "model",
+                "reasoning_effort",
+                "max_ai_credits",
+                "repositories",
+                "max_targets",
+            },
         )
         self.assertTrue(inputs["dry_run"]["default"])
         self.assertEqual(inputs["model"]["default"], "Claude Opus 5.5")
@@ -693,6 +792,17 @@ class CronContracts(WorkflowCase):
         self.assertEqual(
             self.jobs["bot"]["with"]["model"], "${{ needs.options.outputs.model }}"
         )
+
+    def test_dispatch_forwards_session_tuning(self) -> None:
+        """The form offers both, empty by default, and forwards them as typed."""
+        inputs = self.triggers["workflow_dispatch"]["inputs"]
+        for name in TUNING_INPUTS:
+            with self.subTest(input=name):
+                self.assertEqual(inputs[name]["type"], "string")
+                self.assertEqual(inputs[name]["default"], "")
+                self.assertEqual(
+                    self.jobs["bot"]["with"][name], f"${{{{ inputs.{name} || '' }}}}"
+                )
 
     def test_caller_forwards_credentials_and_pins_assets(self) -> None:
         """The template-named credentials reach the workflow; assets pin to the run."""
@@ -766,6 +876,18 @@ class TestingContracts(WorkflowCase):
             dry["with"]["repositories"], "${{ inputs.repositories || '' }}"
         )
         self.assertEqual(dry["with"]["max_targets"], "${{ inputs.max_targets || '2' }}")
+
+    def test_manual_dry_run_forwards_session_tuning(self) -> None:
+        """The manual dry run takes both; the secretless legs take neither."""
+        inputs = self.triggers["workflow_dispatch"]["inputs"]
+        for name in TUNING_INPUTS:
+            with self.subTest(input=name):
+                self.assertEqual(inputs[name]["default"], "")
+                self.assertEqual(
+                    self.jobs["dry-run"]["with"][name],
+                    f"${{{{ inputs.{name} || '' }}}}",
+                )
+                self.assertNotIn(name, self.jobs["plumbing"]["with"])
 
     def test_regression_runs_the_locked_unittest_suite(self) -> None:
         """The offline suite runs from the lockfile with read-only permissions."""
@@ -930,16 +1052,7 @@ class InstallPythonScriptTests(ReusableWorkflowCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Find a Bash 5, as ubuntu-latest runs the step with, or skip."""
-        bash = shutil.which("bash")
-        if bash is None:
-            raise unittest.SkipTest("the Install Python step needs Bash 5+")
-        result = subprocess.run(
-            [bash, "--version"], capture_output=True, text=True, check=True, timeout=5
-        )
-        version = re.search(r"version (\d+)", result.stdout)
-        if version is None or int(version[1]) < 5:
-            raise unittest.SkipTest("Bash 5+ is required to match ubuntu-latest")
-        cls.bash = bash
+        cls.bash = bash_five()
 
     def setUp(self) -> None:
         """Give each run its own scratch directory and output file."""
@@ -1015,6 +1128,126 @@ class InstallPythonScriptTests(ReusableWorkflowCase):
         self.assertFalse(
             self.output.exists() and self.output.read_text(encoding="utf-8")
         )
+
+
+class SessionTuningScriptTests(ReusableWorkflowCase):
+    """Run the real Check inputs and agent steps for the tuning inputs."""
+
+    bash: ClassVar[str]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Find a Bash 5, as ubuntu-latest runs the steps with, or skip."""
+        cls.bash = bash_five()
+
+    def setUp(self) -> None:
+        """Give each run its own scratch directory."""
+        super().setUp()
+        temporary = tempfile.TemporaryDirectory(prefix="bot-workflow-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def run_step(
+        self, job: str, identity: str, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a step's script as Actions runs it, in the scratch directory."""
+        return subprocess.run(
+            [
+                self.bash,
+                "--noprofile",
+                "--norc",
+                "-eo",
+                "pipefail",
+                "-c",
+                self.step(job, identity)["run"],
+            ],
+            cwd=self.root,
+            env={
+                "PATH": os.defpath,
+                "GITHUB_OUTPUT": str(self.root / "github-output"),
+                **env,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+    def check_inputs(self, effort: str, credits: str) -> int:
+        """The Check inputs step's exit status for one pair of values."""
+        env = {
+            "MAX_TARGETS": "20",
+            "MAX_RUNTIME": "20",
+            "MAX_AGENTS": "5",
+            "MODEL": "claude-opus-5.5",
+            "REASONING_EFFORT": effort,
+            "MAX_AI_CREDITS": credits,
+        }
+        return self.run_step("prepare", "budget", env).returncode
+
+    def test_check_inputs_refuses_anything_but_a_level_or_a_count(self) -> None:
+        """Empty or a CLI level; empty or a positive integer. Nothing else."""
+        for effort in ("", *CLI_EFFORT_LEVELS):
+            with self.subTest(effort=effort):
+                self.assertEqual(self.check_inputs(effort, ""), 0)
+        for credits in ("", "1", "250"):
+            with self.subTest(credits=credits):
+                self.assertEqual(self.check_inputs("", credits), 0)
+        for effort in ("High", "extreme", " low", "low ", "low,high"):
+            with self.subTest(bad_effort=effort):
+                self.assertNotEqual(self.check_inputs(effort, ""), 0)
+        for credits in ("0", "-1", "01", "1.5", " 5", "5 ", "ten"):
+            with self.subTest(bad_credits=credits):
+                self.assertNotEqual(self.check_inputs("", credits), 0)
+
+    def run_agent(self, effort: str, credits: str) -> list[str]:
+        """The arguments the agent step passes to a stub copilot."""
+        stub = self.root / "bin"
+        stub.mkdir()
+        log = self.root / "copilot-args"
+        (stub / "copilot").write_text(
+            f"#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done > '{log}'\n",
+            encoding="utf-8",
+        )
+        (stub / "copilot").chmod(0o755)
+        (self.root / "artefacts").mkdir()
+        (self.root / "artefacts" / "prompt.md").write_text("task\n", encoding="utf-8")
+        result = self.run_step(
+            "agent",
+            "agent",
+            {
+                "PATH": f"{stub}:{os.defpath}",
+                "COPILOT_GITHUB_TOKEN": "github_pat_stub",
+                "COPILOT_HOME": str(self.root / "copilot-home"),
+                "MODEL": "claude-opus-5.5",
+                "REASONING_EFFORT": effort,
+                "MAX_AI_CREDITS": credits,
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return log.read_text(encoding="utf-8").splitlines()
+
+    def test_empty_inputs_pass_neither_flag(self) -> None:
+        """The defaults leave the session as it was."""
+        args = self.run_agent("", "")
+        self.assertIn("--model=claude-opus-5.5", args)
+        self.assertFalse(
+            [a for a in args if a.startswith(("--reasoning-effort", "--max-ai"))]
+        )
+        self.assertNotIn("", args)
+
+    def test_each_set_input_passes_its_flag(self) -> None:
+        """A level and a cap reach the CLI as one argument each."""
+        args = self.run_agent("high", "40")
+        self.assertIn("--reasoning-effort=high", args)
+        self.assertIn("--max-ai-credits=40", args)
+
+    def test_one_input_alone_passes_its_flag_alone(self) -> None:
+        """Setting the cap without a level adds the cap and nothing else."""
+        args = self.run_agent("", "40")
+        self.assertIn("--max-ai-credits=40", args)
+        self.assertFalse([a for a in args if a.startswith("--reasoning-effort")])
+        self.assertNotIn("", args)
 
 
 if __name__ == "__main__":

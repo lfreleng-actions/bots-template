@@ -49,13 +49,13 @@ before deciding what a bot keeps or replaces.
   bot writes its own content and a verdict block it must keep.
 - `config/bot.json`: the App slug the pre-flight gate checks.
 
-Five modules are **shared**: `bot_github.py`, `bot_evidence.py`,
-`artifact_fetch.py`, `preflight.py` and `ledger.py`. Each bot carries
-them verbatim. A defect or an improvement in one of them lands here
-first and then propagates to the bots; never patch a bot's copy
-alone. `prepare.py`, `apply.py` and `report.py` are placeholders a
-bot replaces, keeping the files they write and the arguments they
-take.
+Six modules are **shared**: `bot_github.py`, `bot_evidence.py`,
+`bot_app.py`, `artifact_fetch.py`, `preflight.py` and `ledger.py`.
+Each bot carries them verbatim. A defect or an improvement in one
+of them lands here first and then propagates to the bots; never
+patch a bot's copy alone. `prepare.py`, `apply.py` and `report.py`
+are placeholders a bot replaces, keeping the files they write and
+the arguments they take.
 
 Before pushing, run:
 

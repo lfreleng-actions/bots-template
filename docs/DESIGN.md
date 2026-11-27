@@ -184,6 +184,7 @@ before any `create-github-app-token` step, and fails the run closed.
 | Before the read mint | `zizmor --persona auditor` on the checked-out workflows: zero findings                           | Expression injection, `pull_request_target`, cache poisoning, anything the contract tests do not name                                                                                                         |
 | Before the read mint | `config/bot.json` is a small object naming one lower-case slug                                   | A config edit that points identity checks at a different App                                                                                                                                                  |
 | Before the read mint | Credential shapes: client id pattern, PEM markers and plausible key length, `github_pat_` prefix | The wrong secret under the right name; values are never printed                                                                                                                                               |
+| Before the read mint | `GET /app` with a one-minute JWT: the App holds no `forbidden_permissions` entry, at any level   | A permission the bot no longer needs, left on an App that holds it on every installation at once                                                                                                              |
 | Before the read mint | Block mode has a commit-pinned allow-list coordinate and a loaded list                           | An allow-list absent without an error, or pinned to a moving branch                                                                                                                                           |
 | Before the read mint | A live run's `assets_sha` equals `job.workflow_sha`                                              | A reviewed workflow executing unreviewed scripts through `assets_ref`                                                                                                                                         |
 | After the read mint  | The `app-slug` the mint returns equals `config/bot.json`                                         | Another App's private key wired into this workflow                                                                                                                                                            |
@@ -197,17 +198,19 @@ uv-managed Python from `releases.astral.sh` (pinned and hash-checked
 by uv) that every later uv call takes by absolute path, so nothing in
 the job's environment can choose the interpreter, and a `zizmor`
 install from PyPI; the allow-list already carries both hosts.
-Everything it checks is a file already on the runner or a value the
-workflow already holds; it introduces nothing new to trust. A run it
-fails is a run that must not proceed, and the error annotation names
-the check without quoting what the check read.
+Everything it checks is a file already on the runner, a value the
+workflow already holds, or the App's own record, which it reads from
+`api.github.com` with a JWT that lapses after a minute; it
+introduces nothing new to trust. A run it fails is a run that must
+not proceed, and the error annotation names the check without
+quoting what the check read.
 
 The gate is not where policy lives. It verifies that the workflow
 still has the shape the design and tests describe; the design and
 tests remain the place to change that shape. `preflight.py` knows
 the shape every bot shares and nothing of what any one bot does; a
 bot that needs a further check adds a command rather than editing
-the four that exist (see [Customising](CUSTOMISING.md)).
+the ones that exist (see [Customising](CUSTOMISING.md)).
 
 ## 5. Credentials
 
@@ -226,6 +229,15 @@ The slug lives in `config/bot.json`, a small object with `app_slug`
 and an optional `description`; the pre-flight gate refuses a token
 minted by any other App, twice per target: after the read mint and
 before the write.
+
+The same file may carry `forbidden_permissions`, a list of GitHub
+App permission names the App must not hold at any level; absent
+means none. An App holds its permissions on every installation at
+once, so a grant a bot stops needing still reaches every repository
+the App can see until someone removes it in the App's settings.
+The gate reads the App's own record before the read mint and fails
+the run while it holds one. The template forbids `administration`:
+no bot of this shape creates, renames or configures repositories.
 
 The calling workflow names the credentials by role, never by App or
 repository: `vars.BOT_APP_CLIENT_ID` and `secrets.BOT_APP_PRIVATE_KEY`.
@@ -302,6 +314,17 @@ The invocation:
   last fenced `json` block is the verdict.
 - `--usage-output-file artefacts/usage.json` and
   `--log-dir=artefacts/copilot-logs`.
+- `--reasoning-effort=<level>` and `--max-ai-credits=<credits>`,
+  each when its input holds a value. Both inputs default to empty,
+  which passes neither flag and leaves the session at the model's
+  default effort with no credit cap. The prepare job refuses any
+  value but empty or a level the CLI lists, and empty or a positive
+  integer, before any token mint; the values reach the session
+  through `env:`, never an expression in `run:`. Which levels each
+  model accepts, what a credit costs and how a session ends at the
+  cap are for a bot's runs to show; a session that ends at the cap
+  without a verdict is one the apply job already records as having
+  none.
 - `COPILOT_HOME` under `$RUNNER_TEMP`, deleted afterwards along with
   the CLI's spilled tool-output files in the temp directory. That
   cleanup is hygiene on a single-use VM, not secure erasure, and it
@@ -327,7 +350,7 @@ resurrecting the removed code.
 
 ## 7. Shared modules
 
-Five modules are the template's contribution to every bot. Each bot
+Six modules are the template's contribution to every bot. Each bot
 carries them verbatim; a defect or an improvement lands here first
 and propagates. A bot never patches its own copy alone.
 
@@ -452,13 +475,19 @@ a job failure.
 
 ### 7.4 `preflight.py`
 
-The run-time checks of section 4, as four commands: `workflow`
+The run-time checks of section 4, as five commands: `workflow`
 (contract tests and zizmor from the pinned checkout), `config`
 (`config/bot.json`, credential shapes, egress coordinate, live
-assets skew), `identity` (the minted slug) and `token` (a read token
-cannot push). Each prints one line per check and nothing else; no
-value a check read is ever echoed. The workflow calls them under the
-template's credential names, which the contract tests pin.
+assets skew), `app-permissions` (the App's own grants against
+`forbidden_permissions`), `identity` (the minted slug) and `token`
+(a read token cannot push). Each prints one line per check and
+nothing else; no value a check read is ever echoed. The workflow
+calls them under the template's credential names, which the
+contract tests pin.
+
+`app-permissions` reads the App's own grants through `bot_app.py`
+(§7.6). A failed read, or a reply without `permissions`, fails the
+run. A configuration that forbids nothing makes no request.
 
 ### 7.5 `ledger.py`
 
@@ -469,6 +498,21 @@ profile, and writes an empty ledger when no run has published.
 `load_ledger`, `merge`, `already_assessed` and `record` are the
 functions a bot's `prepare.py` and `report.py` call. `RECORDED_VERDICTS`
 is the one constant a bot edits.
+
+### 7.6 `bot_app.py`
+
+Authentication as the App itself rather than as one installation,
+which the App's own record (`GET /app`) requires. `app_permissions`
+takes the client id and the private key and returns the permissions
+the App holds on every installation. It signs a JWT with RS256
+through `openssl`, feeding the key on standard input so the key never
+reaches a file or a command line. The module backdates the JWT by
+60 seconds for clock drift, and the JWT lapses a minute after the
+module makes it. The request goes through the standard library
+rather than `gh`, which would need the JWT as a command-line
+argument to send it under the `Bearer` scheme. Every failure raises
+`AppError`, whose message names neither the key, the JWT nor
+anything `openssl` printed.
 
 ## 8. The ledger
 
@@ -541,6 +585,8 @@ through that repository's own review.
 | `org`                                  | string  | required                         | Target owner; live runs require an organisation App                    |
 | `dry_run`                              | boolean | `true`                           | Run the agent and the checks; write nothing                            |
 | `model`                                | string  | `claude-opus-5.5`                | Copilot CLI model identifier, lower-case                               |
+| `reasoning_effort`                     | string  | `''`                             | CLI reasoning effort per session; empty keeps the model's default      |
+| `max_ai_credits`                       | string  | `''`                             | AI credits per session at most, a positive integer; empty, no cap      |
 | `repositories`                         | string  | `''`                             | Repositories to scan; commas and/or spaces; empty scans the owner      |
 | `exclude_repos`                        | string  | `''`                             | Repositories to skip; commas and/or spaces; overrides the bundled list |
 | `max_targets`                          | string  | `'20'`                           | Targets to hand to the agent at most; `0` lifts the cap                |
@@ -567,9 +613,11 @@ through that repository's own review.
 
 <!-- markdownlint-enable MD013 -->
 
-The prepare job validates every numeric input against its range and
-the model against `^[a-z0-9.-]+$` before anything else runs. The
-`repositories` and `exclude_repos` lists go to
+The prepare job validates every numeric input against its range,
+the model against `^[a-z0-9.-]+$`, `reasoning_effort` against the
+CLI's levels and `max_ai_credits` as a positive integer, each
+allowed empty, before anything else runs. The `repositories` and
+`exclude_repos` lists go to
 [`list-splitter-action`](https://github.com/lfreleng-actions/list-splitter-action),
 which splits each on commas and whitespace, drops repeats without
 regard to case, and refuses anything but a bare repository name of
@@ -583,15 +631,17 @@ the tests (see [Customising](CUSTOMISING.md)).
 ### 10.2 Scheduled caller (`bot-cron.yaml`)
 
 Dispatch inputs `dry_run`, `model` (a display-name choice the
-`options` job maps to an identifier), `repositories` and
-`max_targets`. The `schedule:` block ships commented out, with a
-weekday 07:00 UTC example; a workflow needs one live trigger and the
-dispatch form is it until the bot earns a schedule. Scheduled runs
-stay dry-run until the rollout clears them; a manual dispatch takes
-the operator's choice. The caller passes `org` as
-`github.repository_owner`, so a fork's scheduled runs stay inside the
-fork, and pins `assets_repository` and `assets_ref` to its own
-commit. Disabling the workflow in the Actions UI is the kill switch.
+`options` job maps to an identifier), `reasoning_effort`,
+`max_ai_credits`, `repositories` and `max_targets`. A scheduled run
+forwards the two tuning inputs empty. The `schedule:` block ships
+commented out, with a weekday 07:00 UTC example; a workflow needs
+one live trigger and the dispatch form is it until the bot earns a
+schedule. Scheduled runs stay dry-run until the rollout clears them;
+a manual dispatch takes the operator's choice. The caller passes
+`org` as `github.repository_owner`, so a fork's scheduled runs stay
+inside the fork, and pins `assets_repository` and `assets_ref` to
+its own commit. Disabling the workflow in the Actions UI is the kill
+switch.
 
 ### 10.3 Testing caller (`testing.yaml`)
 
@@ -607,8 +657,10 @@ does, so a pull request also proves the trusted jobs' egress.
 
 The full agent session, dry-run with read access alone, runs from
 `workflow_dispatch` instead: a maintainer triggers it against a
-chosen ref with `repositories` and `max_targets`, and it holds the
-model credential alone. The same workflow runs the offline suite
+chosen ref with `repositories`, `max_targets`, `reasoning_effort` and
+`max_ai_credits`, and it holds the model credential alone. The
+secretless legs take neither tuning input. The same workflow runs
+the offline suite
 under `uv run --locked` and builds the documentation with
 `mkdocs build --strict`.
 
@@ -725,7 +777,7 @@ no credential; the `prek` hook runs it on every commit.
                                          regression, docs build
 .github/workflows/documentation.yaml     mkdocs to GitHub Pages
 prompt/task.md                           agent task, with replace markers
-config/bot.json                          the App slug the gate checks
+config/bot.json                          App slug and forbidden grants (§5.1)
 config/excluded-repos.txt                repositories the scan skips
 tools/copilot-cli/                       pinned CLI lockfile
 scripts/bot_github.py                    shared: gh wrapper (§7.1)
@@ -733,6 +785,7 @@ scripts/bot_evidence.py                  shared: digests, caps (§7.2)
 scripts/artifact_fetch.py                shared: bounded fetch (§7.3)
 scripts/preflight.py                     shared: run-time gate (§7.4)
 scripts/ledger.py                        shared: run-to-run memory (§7.5)
+scripts/bot_app.py                       shared: App authentication (§7.6)
 scripts/prepare.py                       placeholder: selection
 scripts/apply.py                         placeholder: check and write
 scripts/report.py                        placeholder: report and ledger
@@ -768,6 +821,8 @@ shared modules rely on.
   "org": "lfreleng-actions",
   "dry_run": true,
   "model": "claude-opus-5.5",
+  "reasoning_effort": null,
+  "max_ai_credits": null,
   "targets": [
     {
       "key": "repo-157",
@@ -787,7 +842,9 @@ name that scopes the write mint; `number` is the issue or pull
 request; `head_sha` is the commit the agent looked at. A bot adds
 whatever its packet and its offline check need to each target, and
 top-level fields such as skip counts; the agent's packet step
-projects one target out of this file by `key`.
+projects one target out of this file by `key`. `reasoning_effort`
+is the CLI level the run's sessions used, and `max_ai_credits` the
+cap as an integer; each is `null` when its input was empty.
 
 ### 15.2 `matrix.json` (prepare to workflow)
 
