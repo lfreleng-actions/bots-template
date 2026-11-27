@@ -10,7 +10,9 @@ writes ``report.md`` for the step summary, ``report.json`` for the
 run artifact, and the next run's ``ledger.json`` through ``ledger``.
 
 A selected target with no result is reported as ``missing`` and not
-recorded, so the next run looks at it again. Extend ``row_for`` and
+recorded, so the next run looks at it again. The session spend and
+token usage the results carry are summed through ``bot_evidence``,
+which checks each figure again. Extend ``row_for`` and
 ``describe`` with the columns the bot's results carry; the shape of
 the ledger entries stays as ``ledger.py`` defines it.
 """
@@ -23,7 +25,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import ledger
-from bot_evidence import MAX_SUMMARY_BYTES, read_regular
+from bot_evidence import (
+    MAX_SUMMARY_BYTES,
+    USAGE_COUNTS,
+    read_regular,
+    spend_totals,
+    usage_totals,
+)
 
 SCHEMA = 1
 MAX_RESULT_BYTES = 1024 * 1024
@@ -88,6 +96,30 @@ def describe(rows: list[dict[str, Any]], dry_run: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
+def describe_spend(report: dict[str, Any]) -> str:
+    """The markdown spend section: run totals and token usage by model."""
+    lines = [
+        "### Spend",
+        "",
+        f"Premium requests: {report['premium_requests']}; "
+        f"agent seconds: {report['agent_seconds']}.",
+        "",
+    ]
+    totals = cast("list[dict[str, Any]]", report["usage"])
+    if not totals:
+        return "\n".join([*lines, "Token usage: none recorded."]) + "\n"
+    counts = USAGE_COUNTS[1:]
+    headers = ["Model", "Sessions", USAGE_COUNTS[0][1], "Premium requests"]
+    headers += [heading for _, heading in counts]
+    lines += ["Token usage by model:", "", "| " + " | ".join(headers) + " |"]
+    lines.append("|" + " --- |" * len(headers))
+    for total in totals:
+        cells = [total["model"], total["sessions"], total["requests"]]
+        cells += [total["premium_requests"], *(total[field] for field, _ in counts)]
+        lines.append("| " + " | ".join(str(cell) for cell in cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> None:
     """Write the report files and the next ledger."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -108,6 +140,8 @@ def main(argv: list[str] | None = None) -> None:
     targets = cast("list[dict[str, Any]]", selection.get("targets", []))
     dry_run = bool(selection.get("dry_run", True))
     rows = [row_for(target, results.get(str(target["key"]))) for target in targets]
+    summed = [results[str(t["key"])] for t in targets if str(t["key"]) in results]
+    premium_requests, agent_seconds = spend_totals(summed)
     recorded = sum(
         ledger.record(
             prior,
@@ -124,10 +158,14 @@ def main(argv: list[str] | None = None) -> None:
         "dry_run": dry_run,
         "targets": rows,
         "recorded": recorded,
+        "premium_requests": premium_requests,
+        "agent_seconds": agent_seconds,
+        "usage": usage_totals(summed),
     }
     for path in (args.output_md, args.output_json, args.output_ledger):
         path.parent.mkdir(parents=True, exist_ok=True)
-    args.output_md.write_text(describe(rows, dry_run), encoding="utf-8")
+    markdown = describe(rows, dry_run).rstrip("\n") + "\n\n" + describe_spend(report)
+    args.output_md.write_text(markdown, encoding="utf-8")
     args.output_json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     args.output_ledger.write_text(
         json.dumps(ledger.merge([prior]), indent=2) + "\n", encoding="utf-8"

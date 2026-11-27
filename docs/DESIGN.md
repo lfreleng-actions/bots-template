@@ -277,7 +277,11 @@ The default model is `claude-opus-5.5`. The cron caller's dispatch
 form offers Claude Opus 5.5, Claude Fable 5.2, Claude Sonnet 5.5 and
 GPT-6 Astra as display names and maps each to the identifier the CLI
 accepts. The selection records the model, and `usage.json` supplies
-the session's cost figures, which a bot's report may sum.
+the session's spend and token usage by model. `apply` reads it
+through `bot_evidence.session_usage` into `check.json` and
+`result.json`, and the report sums it by model, so the organisation
+can compare what each model consumes after the session artifact
+expires.
 
 ## 6. The Copilot CLI harness
 
@@ -299,7 +303,7 @@ The invocation:
   --no-auto-update --no-color`: no interaction, no instructions from
   the runner's home, no MCP servers, no self-update at run time.
 - `--share=artefacts/session-summary.md`: the session summary whose
-  last fenced `json` block is the verdict.
+  final fenced block, which must be `json`, is the verdict.
 - `--usage-output-file artefacts/usage.json` and
   `--log-dir=artefacts/copilot-logs`.
 - `COPILOT_HOME` under `$RUNNER_TEMP`, deleted afterwards along with
@@ -405,9 +409,9 @@ first.
 
 ### 7.2 `bot_evidence.py`
 
-Two parts: the `verify` command the workflow runs in every consumer
-job, and the cap table for what an untrusted session may hand to a
-trusted job.
+Three parts: the `verify` command the workflow runs in every
+consumer job, the cap table for what an untrusted session may hand
+to a trusted job, and the reader for the session's usage.
 
 `verify --directory DIR --expect NAME=SHA256 [--expect ...]` checks
 the exact bytes of each named file against the digest the trusted
@@ -421,6 +425,28 @@ file they open.
 
 A bot that needs more from its sessions extends `SESSION_FILES`;
 the trusted jobs read nothing else from a session.
+
+`session_usage` takes the parsed `usage.json`, in the shape
+`@github/copilot` 1.0.105 writes, and returns three fields:
+`premium_requests` from `totalPremiumRequestCost`, `agent_seconds`
+from `totalApiDurationMs` in whole seconds, rounded down, and
+`usage`: the session's `nano_aiu` and `last_call_input_tokens`, and
+for each model its `requests`, `premium_requests`, `input_tokens`
+(cache reads and writes included), `cache_read_tokens`,
+`cache_write_tokens`, `output_tokens`, `reasoning_tokens` and
+`nano_aiu`. The file comes from the agent job, so each figure must
+be a finite, non-negative number and not a boolean, and the reader
+stores a count as an integer. It keeps a model whose name matches
+`^[a-z0-9.-]+$` within 100 characters and that carries at least one
+figure: at most eight, sorted by name. It leaves out a field that
+fails, and nothing raises. With no file, or one that is not a JSON
+object, all three fields are null; `usage` is null too when the file
+holds none of its figures. `usage_totals` and `spend_totals` sum
+result files by model and for the run, checking each figure again,
+since a result file is a claim too, and never carrying a total past
+a finite number. One reader in the shared module keeps the record
+the same in every bot, and gives one place to change when the CLI
+changes the file.
 
 ### 7.3 `artifact_fetch.py`
 
@@ -829,7 +855,7 @@ module rather than the file.
 
 ### 15.4 Agent verdict (agent to apply; untrusted)
 
-The last fenced `json` block of `session-summary.md`:
+The final fenced block of `session-summary.md`, which must be `json`:
 
 ```json
 {
@@ -845,13 +871,25 @@ The last fenced `json` block of `session-summary.md`:
 }
 ```
 
+The check walks the summary's fences once, pairing each opener with
+the next fence of the same character, at least as long, with nothing
+after it. The summary holds the whole session, the prompt's example
+block and every tool output among it, so the final block alone
+counts: when a fenced block of another kind follows the verdict, or
+the final fence never closes, there is no verdict, and an earlier
+`json` block never stands in for it.
+
 `verdict` is `act` or `needs-human`. The placeholder check refuses a
 block whose `schema` is not 1, whose `repository`, `number` or
 `head_sha` differs from the trusted target, whose verdict token is
-unknown or whose `summary` is not a string. A bot renames the
-verdict tokens to its own vocabulary in `prompt/task.md` and
-`AGENT_VERDICTS` together, and adds the fields its corroboration
-reads.
+unknown, whose `summary` is not a string, or whose `findings` or
+`injection_attempts`, where present, is not a list. It also refuses
+to act on a block that reports any injection attempt, with the
+reason `the agent reported an injection attempt`: the agent saw the
+packet try to steer it, and a human should see what it saw before
+the bot writes anything. A bot renames the verdict tokens to its own
+vocabulary in `prompt/task.md` and `AGENT_VERDICTS` together, and
+adds the fields its corroboration reads.
 
 ### 15.5 `check.json` (apply, offline; trusted)
 
@@ -863,6 +901,20 @@ reads.
              "number": 157, "head_sha": "<40 hex>"},
   "verdict": "needs-human",
   "summary": "bounded to 2000 characters",
+  "findings": [{"area": "other", "note": "..."}],
+  "injection_attempts": [],
+  "premium_requests": 1.0,
+  "agent_seconds": 31,
+  "usage": {
+    "nano_aiu": 51939650000,
+    "last_call_input_tokens": 30972,
+    "models": [
+      {"model": "gpt-6-astra", "requests": 7, "premium_requests": 1.0,
+       "input_tokens": 122814, "cache_read_tokens": 91824,
+       "cache_write_tokens": 30969, "output_tokens": 805,
+       "reasoning_tokens": 80, "nano_aiu": 51939650000}
+    ]
+  },
   "reasons": ["the session ended without a verdict block"]
 }
 ```
@@ -872,6 +924,20 @@ said `act`; the step prints `approvable=true|false` as its output
 and the write mint runs on `true`, off dry-run, with a client id.
 `verdict` is `failed` when the fetch reported a missing or refused
 session and `needs-human` otherwise; `apply` promotes it.
+
+`findings` and `injection_attempts` record what the agent reported,
+bounded as the review bot bounds them: the first 20 entries of each,
+every string cut to 400 characters. A finding keeps its `area` and
+`note`; the check keeps an entry of another shape as its compact
+JSON, cut the same way, so a report the agent made in the wrong
+shape still reaches a human. Both are empty when there is no verdict
+block or the field is not a list.
+
+`premium_requests`, `agent_seconds` and `usage` are what
+`bot_evidence.session_usage` reads from the accepted `usage.json`
+(section 7.2). They are null when the session has no usage file,
+when the file is unreadable or not a JSON object, and when the fetch
+reported a failure; usage never stops the check.
 
 ### 15.6 `result.json` (apply, per target; trusted)
 
@@ -885,6 +951,11 @@ session and `needs-human` otherwise; `apply` promotes it.
   "verdict": "would-do",
   "reasons": [],
   "summary": "...",
+  "findings": [],
+  "injection_attempts": [],
+  "premium_requests": 1.0,
+  "agent_seconds": 31,
+  "usage": {"models": [{"model": "gpt-6-astra", "requests": 7}]},
   "write_url": null,
   "dry_run": true,
   "run_attempt": 1,
@@ -895,9 +966,12 @@ session and `needs-human` otherwise; `apply` promotes it.
 `verdict` is `would-do` on an approvable dry run, `done` when the
 live write returned a URL, `needs-human` when it did not or the check
 refused, and `failed` when the fetch failed or, through the
-workflow's fallback step, when apply did not complete. The fallback
-writes the same shape with `repo_name` added, so every selected
-target reaches the report.
+workflow's fallback step, when apply did not complete. `apply`
+carries `findings`, `injection_attempts` and the three usage fields
+on from `check.json`. The
+fallback writes the identity, verdict, reasons and run fields with
+`repo_name` added, so every selected target reaches the report; a
+reader treats a field the fallback leaves out as absent.
 
 ### 15.7 `report.json` and `report.md` (report; trusted)
 
@@ -911,7 +985,16 @@ target reaches the report.
      "number": 157, "head_sha": "<40 hex>", "verdict": "would-do",
      "reasons": [], "write_url": null}
   ],
-  "recorded": 1
+  "recorded": 1,
+  "premium_requests": 2.0,
+  "agent_seconds": 62,
+  "usage": [
+    {"model": "gpt-6-astra", "sessions": 2, "requests": 14,
+     "premium_requests": 2.0, "input_tokens": 245628,
+     "cache_read_tokens": 183648, "cache_write_tokens": 61938,
+     "output_tokens": 1610, "reasoning_tokens": 160,
+     "nano_aiu": 103879300000}
+  ]
 }
 ```
 
@@ -921,6 +1004,17 @@ and reasons; a bot's `row_for` and `describe` add the columns its
 results carry. `recorded` counts the entries this run added to the
 ledger.
 
+`premium_requests` and `agent_seconds` total the selected targets'
+results; `usage` sums their usage records by model, with the number
+of sessions that used each model, sorted by name. Both come from
+`bot_evidence.spend_totals` and `usage_totals`, which check each
+figure again as they sum it: a result file is a claim, so a figure
+that is absent or malformed, a model name outside the pattern, a
+model past the eighth in one result, or a figure that would carry a
+total past a finite number adds nothing. A figure a model never
+reported totals 0. `report.md` renders the totals and a table of
+usage by model under a Spend heading, or says it holds no usage.
+
 ## 16. What the template leaves to each bot
 
 - **Selection.** What a target is, how the scan finds it, which
@@ -928,8 +1022,11 @@ ledger.
   `select_targets` returns an empty list.
 - **The task.** Every `replace` marker in `prompt/task.md`: the
   bot's name, its rules, the packet fields, the procedure and the
-  areas its findings use. The trust framing, the tool list and the
-  verdict block stay.
+  areas its findings use. The trust framing stays: packet text is
+  data, and an injection attempt is text that tries to change the
+  assessment, not text addressed to a human reader or a repository's
+  guidance for its own contributors. The tool list and the verdict
+  block stay too.
 - **Corroboration.** What the apply job checks before it believes
   an `act`: a deterministic classifier, a live re-read of the
   target, a veto list. The template checks shape and identity and

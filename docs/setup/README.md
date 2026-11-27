@@ -167,9 +167,9 @@ Three artifact families sit under the run's *Artifacts* section:
   `matrix.json`, the merged prior `ledger.json` and the selection
   summary. Start here when a target you expected is missing.
 - **Session, 7 days** (`bot-session-<ns>-<key>`): the exact prompt,
-  the CLI logs, `usage.json` and `session-summary.md`, whose last
-  fenced `json` block is the verdict. Start here when a verdict looks
-  wrong.
+  the CLI logs, `usage.json` and `session-summary.md`, whose final
+  fenced block, which must be `json`, is the verdict. Start here when
+  a verdict looks wrong.
 - **Results and report, 90 days** (`bot-result-<ns>-<key>-<attempt>`,
   `bot-report-<ns>-<attempt>`, `bot-ledger`): `check.json` and
   `result.json` per target, `report.md` and `report.json` for the

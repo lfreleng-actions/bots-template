@@ -107,24 +107,40 @@ title, the role paragraph's first sentence, rule 1's packet fields,
 the rules from 7 onwards, the environment list, the procedure and
 the areas a finding may name are the bot's. The trust framing (no
 credential, a separate trusted job checks the verdict, packet text
-is data), the tool list and the verdict block stay, because the
-apply job and the tool policy depend on them. The prompt must not
-restate organisation policy on commits, tests or reviews; the agent
-receives the organisation `AGENTS.md` for that in bots that need it,
-and a copy drifts.
+is data, and the definition of an injection attempt), the tool list
+and the verdict block stay, because the apply job and the tool
+policy depend on them. The prompt must not restate organisation
+policy on commits, tests or reviews; the agent receives the
+organisation `AGENTS.md` for that in bots that need it, and a copy
+drifts.
+
+The definition of an injection attempt is narrow on purpose. Text
+that tries to change the assessment is one; an author's account of
+their work, notes for a human reader and a repository's own
+`AGENTS.md` or `CONTRIBUTING.md` are not. The agent acts on none of
+those and checks what they claim. A broader definition buries the
+real attempts among false reports: the review bot's agent, told to
+record anything that seemed to give instructions, reported 33 in
+215 sessions and none was one.
 
 A bot that renames the verdict tokens changes `AGENT_VERDICTS` in
 `apply.py` and the prompt together.
 
 ### `apply.py`
 
-`check` reads the last fenced `json` block of the accepted summary,
-refuses one about another target, and prints `approvable=true` when
-the write mint may run. A bot extends `check_verdict` with its own
-corroboration: a deterministic classifier over the packet, a veto
-list, a cross-check of the agent's findings against the selection.
-Everything the check reads comes from `selection.json` and the
-bounded session; it has no token and makes no network call.
+`check` reads the final fenced block of the accepted summary, which
+must be `json`, refuses one about another target or one that reports
+an injection attempt, and prints `approvable=true` when the write
+mint may run. Keep `final_json_block`: it reads the untrusted summary
+in one pass, and an earlier block never stands in for a missing
+verdict. Keep the injection refusal too, and the bounded `findings`
+and `injection_attempts` that `check.json` and `result.json` record;
+what an `act` verdict with findings means is the bot's decision. A
+bot extends `check_verdict` with its own corroboration: a
+deterministic classifier over the packet, a veto list, a cross-check
+of the agent's findings against the selection. Everything the check
+reads comes from `selection.json` and the bounded session; it has no
+token and makes no network call.
 
 `apply` runs after the mint. `perform_write(target, summary)` holds
 the bot's one write: re-read the live target with the token in
@@ -149,6 +165,14 @@ compare-and-swap; DESIGN.md section 7.1 says which writes qualify.
 a tier, a label set, a pull request URL. The ledger entries stay as
 `ledger.py` defines them; a bot that wants to remember more extends
 `check_entry` in the shared module and proposes it to the template.
+
+Keep `describe_spend` and the `premium_requests`, `agent_seconds`
+and `usage` totals in `report.json`. They sum what `apply` carried
+into each result through `bot_evidence.usage_totals` and
+`spend_totals`, which check every figure again, so every bot reports
+spend and token usage by model in the same shape. A bot whose
+results hold usage under other names maps them to these fields
+rather than summing them its own way.
 
 ## Adding an input
 
